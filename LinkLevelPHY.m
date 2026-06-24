@@ -227,7 +227,7 @@ channelBandwidth = (fMax - fMin) / numFrequencyChannels;
 carrierFrequencies = fMin + channelBandwidth/2 + ...
     (0:numFrequencyChannels-1)*channelBandwidth; % list comprehension (0:i)
 % Time-frequency hopping pattern
-rng(1234);   % results reproducibility
+rng();   % results reproducibility
 timeSlots = 1:numBursts; % vector column
 % Random offset inside each slot
 maxOffset = slotDuration - burstTxTime;
@@ -241,7 +241,8 @@ carrierForBurst = carrierFrequencies(frequencyChannels).';
 startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset; % arrray
 endTimes = startTimes + burstTxTime; % array
 
-%{%}
+%{
+% display hopping table
 hoppingTable = table( ...
     (1:numBursts).', ...
     timeSlots.', ...
@@ -253,22 +254,82 @@ hoppingTable = table( ...
     {'BurstID','TimeSlot','Start_us','End_us', ...
      'FrequencyChannel','Carrier_MHz'});
 disp(hoppingTable);
+%}
 
-
+% TODO! do we really need the following structure?
 % Build transmission structure
-
 for k = 1:numBursts
-
     transmission(k).burstID = k; %#ok<SAGROW>
     transmission(k).timeSlot = timeSlots(k); %#ok<SAGROW>
     transmission(k).startTime_s = startTimes(k); %#ok<SAGROW>
     transmission(k).endTime_s = endTimes(k); %#ok<SAGROW>
-
     transmission(k).frequencyChannel = frequencyChannels(k); %#ok<SAGROW>
     transmission(k).carrierFrequency_Hz = carrierForBurst(k); %#ok<SAGROW>
-
     transmission(k).signal = txSCFDEBursts(:,k); %#ok<SAGROW>
-
 end
 
-% TODO! GENERA IL SEGNALE VERO E PROPRIO!
+%% Final transmitted EQUIVALENT-BASEBAND signal
+% NOTE! Due to Nyquist and thanks to the fact that we are simulating in
+% baseband, we must use: sapmlesPerSymbol > 2*(fmax_occupied)/symbolRate
+% in which fmax_occupied = [max(relativeCarrierFrequencies) +
+% (relativeCarrierFrequencies(6) - relativeCarrierFrequencies(5))]
+samplesPerSymbol = 8; % number of samples per symbol
+Fs = symbolRate * samplesPerSymbol; % sampling frequency
+totalTime = max(endTimes); % final time for transmitting the whole packet 
+% (last burst)
+numSamplesTotal = ceil(totalTime * Fs) + 1; % +1 for safety reasons
+txSignal = zeros(numSamplesTotal,1);
+% we move to baseband, to avoid computational overheads of L-band (Nyquist)
+fCenter = mean(carrierFrequencies);
+% Frequencies relative to bandwidth center
+relativeCarrierFrequencies = carrierFrequencies - fCenter;
+
+for k = 1:numBursts
+    % from where we sample
+    burstSymbols = txSCFDEBursts(:,k);
+    % Oversampling: each symbol is repeated #samplePerSymbol times
+    burstSignal = repelem(burstSymbols, samplesPerSymbol);
+    % initial sampling window
+    startSample = round(startTimes(k)*Fs) + 1;
+    % ending sampling window
+    endSample = startSample + length(burstSignal) - 1;
+    % absolute temporal axes
+    n = (startSample-1:endSample-1).';
+    t = n/Fs; % in order to shift a signal we must multiply it by a complex 
+    % time variant sinusoid
+    fRel = relativeCarrierFrequencies(frequencyChannels(k));
+    % originally the burst was center in 0 Hz, now we center it to fRel Hz
+    % multiplying a complex sinusoid varying in time, is equal to shift its 
+    % signal in the frequency
+    burstUpconverted = burstSignal .* exp(1j*2*pi*fRel*t);
+    % populating the signal to send
+    txSignal(startSample:endSample) = ...
+        txSignal(startSample:endSample) + burstUpconverted;
+end
+
+%{
+%% Conversion in reception of EQUIVALENT-BASEBAND signal
+rxSignal = txSignal; % ASSUMPTION! ideal channel
+rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
+for k = 1:numBursts
+    % Same time window used at transmitter
+    startSample = round(startTimes(k)*Fs) + 1;
+    % Notice that this is different from Tx, since there was repelem
+    endSample = startSample + symbolsPerBurstWithCP*samplesPerSymbol - 1;
+    % Extract received burst samples
+    rxBurstUpconverted = rxSignal(startSample:endSample);
+    % Absolute temporal axis
+    n = (startSample-1:endSample-1).';
+    t = n/Fs;
+    % Relative carrier frequency used for this burst
+    fRel = relativeCarrierFrequencies(frequencyChannels(k));
+    % Downconversion: bring burst back to baseband
+    rxBurstBaseband = rxBurstUpconverted .* exp(-1j*2*pi*fRel*t);
+    % Downsampling: from samples to symbols
+    % Since TX used repelem, take one sample every samplesPerSymbol
+    rxBurstSymbols = rxBurstBaseband(1:samplesPerSymbol:end);
+    % Store recovered SC-FDE burst
+    rxSCFDEBursts(:,k) = rxBurstSymbols;
+end
+%}
+
