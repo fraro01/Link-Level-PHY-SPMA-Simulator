@@ -268,16 +268,30 @@ for k = 1:numBursts
     transmission(k).signal = txSCFDEBursts(:,k); %#ok<SAGROW>
 end
 
-%% Final transmitted EQUIVALENT-BASEBAND signal
+%% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
 % baseband, we must use: sapmlesPerSymbol > 2*(fmax_occupied)/symbolRate
 % in which fmax_occupied = [max(relativeCarrierFrequencies) +
 % (relativeCarrierFrequencies(6) - relativeCarrierFrequencies(5))]
 samplesPerSymbol = 8; % number of samples per symbol
 Fs = symbolRate * samplesPerSymbol; % sampling frequency
+% Configuration of Root Raised Cosine TX Filter
+rolloff = 0.35; % how much extra band we use
+filterSpan = 12; % filter duration in symbols
+txRRC = comm.RaisedCosineTransmitFilter( ...
+    'Shape','Square root', ...
+    'RolloffFactor',rolloff, ...
+    'FilterSpanInSymbols',filterSpan, ...
+    'OutputSamplesPerSymbol',samplesPerSymbol);
+totalFilterDelaySymbols = filterSpan;
 totalTime = max(endTimes); % final time for transmitting the whole packet 
 % (last burst)
-numSamplesTotal = ceil(totalTime * Fs) + 1; % +1 for safety reasons
+symbolsPerBurstWithCP = size(txSCFDEBursts,1);
+extraSymbols = filterSpan; % due to Pulse Shaping Filter tails
+samplesPerShapedBurst = ...
+    (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
+numSamplesTotal = ceil(totalTime * Fs) + samplesPerShapedBurst + 1; % +1 
+% for safety reasons
 txSignal = zeros(numSamplesTotal,1);
 % we move to baseband, to avoid computational overheads of L-band (Nyquist)
 fCenter = mean(carrierFrequencies);
@@ -285,14 +299,15 @@ fCenter = mean(carrierFrequencies);
 relativeCarrierFrequencies = carrierFrequencies - fCenter;
 
 for k = 1:numBursts
-    % from where we sample
-    burstSymbols = txSCFDEBursts(:,k);
-    % Oversampling: each symbol is repeated #samplePerSymbol times
-    burstSignal = repelem(burstSymbols, samplesPerSymbol);
-    % initial sampling window
-    startSample = round(startTimes(k)*Fs) + 1;
+    reset(txRRC); % clean the filter
+    burstSymbols = txSCFDEBursts(:,k); % from where we sample
+    % Add zeros to flush the TX/RX filter memory
+    burstSymbolsPadded = [burstSymbols; zeros(extraSymbols,1)];
+    % Pulse shaping
+    shapedBurst = txRRC(burstSymbolsPadded);
+    startSample = round(startTimes(k)*Fs) + 1;  % initial sampling window
     % ending sampling window
-    endSample = startSample + length(burstSignal) - 1;
+    endSample = startSample + length(shapedBurst) - 1;
     % absolute temporal axes
     n = (startSample-1:endSample-1).';
     t = n/Fs; % in order to shift a signal we must multiply it by a complex 
@@ -301,21 +316,30 @@ for k = 1:numBursts
     % originally the burst was center in 0 Hz, now we center it to fRel Hz
     % multiplying a complex sinusoid varying in time, is equal to shift its 
     % signal in the frequency
-    burstUpconverted = burstSignal .* exp(1j*2*pi*fRel*t);
+    burstUpconverted = shapedBurst .* exp(1j*2*pi*fRel*t);
     % populating the signal to send
     txSignal(startSample:endSample) = ...
         txSignal(startSample:endSample) + burstUpconverted;
 end
 
 %{
-%% Conversion in reception of EQUIVALENT-BASEBAND signal
+%% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter
+% pulse shaping filter Rx
+rxRRC = comm.RaisedCosineReceiveFilter( ...
+    'Shape','Square root', ...
+    'RolloffFactor',rolloff, ...
+    'FilterSpanInSymbols',filterSpan, ...
+    'InputSamplesPerSymbol',samplesPerSymbol, ...
+    'DecimationFactor',samplesPerSymbol);
+
 rxSignal = txSignal; % ASSUMPTION! ideal channel
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 for k = 1:numBursts
+    reset(rxRRC); % clean the filter
     % Same time window used at transmitter
     startSample = round(startTimes(k)*Fs) + 1;
     % Notice that this is different from Tx, since there was repelem
-    endSample = startSample + symbolsPerBurstWithCP*samplesPerSymbol - 1;
+    endSample = startSample + samplesPerShapedBurst - 1;
     % Extract received burst samples
     rxBurstUpconverted = rxSignal(startSample:endSample);
     % Absolute temporal axis
@@ -325,11 +349,20 @@ for k = 1:numBursts
     fRel = relativeCarrierFrequencies(frequencyChannels(k));
     % Downconversion: bring burst back to baseband
     rxBurstBaseband = rxBurstUpconverted .* exp(-1j*2*pi*fRel*t);
-    % Downsampling: from samples to symbols
-    % Since TX used repelem, take one sample every samplesPerSymbol
-    rxBurstSymbols = rxBurstBaseband(1:samplesPerSymbol:end);
+    % Matched filter + downsampling (from samples we go back to symbols)
+    rxBurstSymbolsPadded = rxRRC(rxBurstBaseband);
+    % Remove total TX+RX filter delay
+    rxBurstSymbols = rxBurstSymbolsPadded( ...
+        totalFilterDelaySymbols + 1 : ...
+        totalFilterDelaySymbols + symbolsPerBurstWithCP);
     % Store recovered SC-FDE burst
     rxSCFDEBursts(:,k) = rxBurstSymbols;
 end
+
+% testing
+errMax = max(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)));
+errRMS = sqrt(mean(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)).^2));
+fprintf('Max error: %.3e\n', errMax);
+fprintf('RMS error: %.3e\n', errRMS);
 %}
 
