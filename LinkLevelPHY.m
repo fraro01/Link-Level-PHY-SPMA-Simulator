@@ -9,6 +9,12 @@ close all;
 * 
 %}
 
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                           TRANSMITTER                                   %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 %% Originate the Packet
 % Set the length of the packet in bits
 packetLength = 1331;
@@ -16,7 +22,10 @@ packetLength = 1331;
 packet = randi([0 1], packetLength, 1); %column vector not row for applying 
 % turbo coding
 
+
 %% Turbo Coding
+% TODO! add trellis and numeiterations
+% NOTE! study the turbo coding functionings
 % Interleaver turbo
 interleaverIndices = randperm(packetLength);
 % Turbo encoder rate 1/3, (it is the standard)
@@ -25,27 +34,6 @@ turboEnc = comm.TurboEncoder('InterleaverIndices', interleaverIndices);
 % Coding
 encodedPacket = turboEnc(packet);
 
-% TODO! add trellis and numeiterations
-% NOTE! study the turbo coding functionings
-%{
-%% Ideal Channel: No noise
-%The decoder does not want bit 0/1, instead soft values.
-% Typical convention:
-% bit 0 -> -1
-% bit 1 -> +1
-rxSoft = 2*encodedPacket - 1;
-
-%% Turbo decoder
-%numIterations = 6;
-turboDec = comm.TurboDecoder( ...
-    'InterleaverIndices', interleaverIndices);
-    %'NumIterations', numIterations);
-
-decodedPacket = turboDec(rxSoft);
-
-% Just to compare
-numErrors = sum(packet ~= decodedPacket);
-%}
 
 %% Divide the Original Packet into Bursts
 % ASSUMPTION! we assume the number of bits per packet fixed, hence packet
@@ -61,6 +49,7 @@ numPaddingBits = bitsPerBurst*numBursts - numEncodedBits;
 encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
 % (144 x numBursts) matrix keeping the order of bits
 bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
+
 
 %% 16 sync reference bits, 16 phase reference bits, 5 indexing bits 
 % the sync and the reference bits remain fixed for all bursts
@@ -82,6 +71,7 @@ for k = 1:numBursts
         bursts(:,k)           % 144 bit coded, from column k
     ];
 end
+
 
 %% 8-PSK Modulation
 M = 8;
@@ -113,35 +103,6 @@ for k = 1:numBursts
         'gray'); % Gray coding, hence close symbols differ for only 1 bit
 end
 
-%{
-%% 8-PSK Demodulation
-rxModulatedBursts = modulatedBursts; % ...ideally they should be different 
-% due to channel effects
-rxFramedBurstsPadded = zeros(symbolsPerBurst*bitsPerSymbol, numBursts);
-
-for k = 1:numBursts
-
-    rxSymbols_k = rxModulatedBursts(:,k);
-
-    rxSymbolIndices = pskdemod( ...
-        rxSymbols_k, ...
-        M, ...
-        pi/M, ...
-        'gray');
-
-    rxBitGroups = de2bi(rxSymbolIndices, bitsPerSymbol, 'left-msb');
-
-    rxFramedBurstsPadded(:,k) = reshape(rxBitGroups.', [], 1);
-
-end
-
-% Remove 8-PSK padding
-rxFramedBursts = rxFramedBurstsPadded( ...
-    1:end-numPadBits8PSK, ...
-    :);
-% check for the errors Tx - Rx
-numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:));
-%}
 
 %% SC-FDE Modulation, Cyclic Prefix 
 cpLength = 16; % TODO! this must be set acccording to the channel length
@@ -159,53 +120,6 @@ for k = 1:numBursts
     ];
 end
 
-%{
-%% SC-FDE Demodulation, Basic Channel + MMSE
-% example of simple multipath channel, column vector, three taps
-h = [0.9;      % LOS
-    0.4+0.2j;  % echo 1
-    0.2-0.1j]; % echo 2
-
-% noise
-SNRdB = 20; % signal to noise ratio in dB
-SNRlin = 10^(SNRdB/10); % converts the above SNR from dB to linear value
-noiseVar = 1/SNRlin; % noise variance
-
-% Channel + Noise
-rxSCFDEBursts = zeros(size(txSCFDEBursts));
-for k = 1:numBursts
-    txBurst = txSCFDEBursts(:,k);
-    rxBurst = filter(h, 1, txBurst); % channel response as a convolution, 
-    % without retroaction as a FIR between the Tx signal and the channel.
-    noise = sqrt(noiseVar/2) * ... % complex noise, divided by 2, because the variance gets divided between Re and Im
-        (randn(size(rxBurst)) + 1j*randn(size(rxBurst))); % complex noise
-    rxSCFDEBursts(:,k) = rxBurst + noise;
-end
-
-% frequency response of the channel, padded so to get the same number of
-% bins in output desired for the element wise operations per symbolPerBurst
-H = fft(h, symbolsPerBurst);
-
-% MMSE equalizer
-% NOTE!  in this first implementation we do not estimate the channel!
-% ./ element-wise division, abs(H).^2 squared modulus of H --> channel
-% power for each frequency
-Wmmse = conj(H) ./ (abs(H).^2 + noiseVar);
-
-% Remove CP + equalization MMSE
-rxEqualizedBursts = zeros(symbolsPerBurst, numBursts);
-for k = 1:numBursts
-    rxBurstCP = rxSCFDEBursts(:,k);
-    % Remove cyclic prefix
-    rxBurst = rxBurstCP(cpLength+1 : cpLength+symbolsPerBurst);
-    % FFT
-    Y = fft(rxBurst, symbolsPerBurst);
-    % Frequency-domain MMSE equalization, .* element-wise multiplication
-    Xhat = Wmmse .* Y; % burt estimation in the frequency domain
-    % IFFT: go back to the symbol 8-PSK
-    rxEqualizedBursts(:,k) = ifft(Xhat, symbolsPerBurst);
-end
-%}
 
 %% Time-Frequency Hopping
 % NOTE! we are also distribuiting the burst over a pseudo-casual time
@@ -272,6 +186,7 @@ disp(hoppingTable);
 %}
 
 % TODO! do we really need the following structure?
+%{
 % Build transmission structure
 for k = 1:numBursts
     transmission(k).burstID = k; %#ok<SAGROW>
@@ -282,6 +197,7 @@ for k = 1:numBursts
     transmission(k).carrierFrequency_Hz = carrierForBurst(k); %#ok<SAGROW>
     transmission(k).signal = txSCFDEBursts(:,k); %#ok<SAGROW>
 end
+%}
 
 %% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
@@ -354,8 +270,17 @@ for k = 1:numBursts
         txSignal(startSample:endSample) + burstUpconverted;
 end
 
-%{%}
-%% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                          END TRANSMITTER                                %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                             RECEIVER                                    %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
 % pulse shaping filter Rx
 rxRRC = comm.RaisedCosineReceiveFilter( ...
     'Shape','Square root', ...
@@ -394,11 +319,101 @@ for k = 1:numBursts
     % Store recovered SC-FDE burst
     rxSCFDEBursts(:,k) = rxBurstSymbols;
 end
-
-% testing
+%{
+%testing
 errMax = max(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)));
 errRMS = sqrt(mean(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)).^2));
 fprintf('Max error: %.3e\n', errMax);
 fprintf('RMS error: %.3e\n', errRMS);
+%}
 
 
+%% SC-FDE Demodulation, Basic Channel + MMSE
+% example of simple multipath channel, column vector, three taps
+h = [0.9;      % LOS
+    0.4+0.2j;  % echo 1
+    0.2-0.1j]; % echo 2
+
+% noise
+SNRdB = 20; % signal to noise ratio in dB
+SNRlin = 10^(SNRdB/10); % converts the above SNR from dB to linear value
+noiseVar = 1/SNRlin; % noise variance
+
+% Channel + Noise
+rxSCFDEBursts = zeros(size(txSCFDEBursts));
+for k = 1:numBursts
+    txBurst = txSCFDEBursts(:,k);
+    rxBurst = filter(h, 1, txBurst); % channel response as a convolution, 
+    % without retroaction as a FIR between the Tx signal and the channel.
+    noise = sqrt(noiseVar/2) * ... % complex noise, divided by 2, because the variance gets divided between Re and Im
+        (randn(size(rxBurst)) + 1j*randn(size(rxBurst))); % complex noise
+    rxSCFDEBursts(:,k) = rxBurst + noise;
+end
+
+% frequency response of the channel, padded so to get the same number of
+% bins in output desired for the element wise operations per symbolPerBurst
+H = fft(h, symbolsPerBurst);
+
+% MMSE equalizer
+% NOTE!  in this first implementation we do not estimate the channel!
+% ./ element-wise division, abs(H).^2 squared modulus of H --> channel
+% power for each frequency
+Wmmse = conj(H) ./ (abs(H).^2 + noiseVar);
+
+% Remove CP + equalization MMSE
+rxEqualizedBursts = zeros(symbolsPerBurst, numBursts);
+for k = 1:numBursts
+    rxBurstCP = rxSCFDEBursts(:,k);
+    % Remove cyclic prefix
+    rxBurst = rxBurstCP(cpLength+1 : cpLength+symbolsPerBurst);
+    % FFT
+    Y = fft(rxBurst, symbolsPerBurst);
+    % Frequency-domain MMSE equalization, .* element-wise multiplication
+    Xhat = Wmmse .* Y; % burt estimation in the frequency domain
+    % IFFT: go back to the symbol 8-PSK
+    rxEqualizedBursts(:,k) = ifft(Xhat, symbolsPerBurst);
+end
+
+
+%% 8-PSK Demodulation
+rxModulatedBursts = modulatedBursts; % ...ideally they should be different 
+% due to channel effects
+rxFramedBurstsPadded = zeros(symbolsPerBurst*bitsPerSymbol, numBursts);
+
+for k = 1:numBursts
+    rxSymbols_k = rxModulatedBursts(:,k);
+    rxSymbolIndices = pskdemod( ...
+        rxSymbols_k, ...
+        M, ...
+        pi/M, ...
+        'gray');
+    rxBitGroups = de2bi(rxSymbolIndices, bitsPerSymbol, 'left-msb');
+    rxFramedBurstsPadded(:,k) = reshape(rxBitGroups.', [], 1);
+end
+
+% Remove 8-PSK padding
+rxFramedBursts = rxFramedBurstsPadded( ...
+    1:end-numPadBits8PSK, ...
+    :);
+% check for the errors Tx - Rx
+numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:));
+
+
+
+%% Turbo decoder
+% Ideal Channel: No noise
+%The decoder does not want bit 0/1, instead soft values.
+% Typical convention:
+% bit 0 -> -1
+% bit 1 -> +1
+rxSoft = 2*encodedPacket - 1;
+% numIterations = 6; the default is 6
+turboDec = comm.TurboDecoder( ...
+    'InterleaverIndices', interleaverIndices);
+    %'NumIterations', numIterations);
+decodedPacket = turboDec(rxSoft);
+
+% Just to compare
+%{
+numErrors = sum(packet ~= decodedPacket);
+%}
