@@ -3,9 +3,9 @@ clear;
 close all;
 
 %{
-* ctrl + f --> TODO! for coding 
-* ctrl + f --> NOTE! for something over which we must pay attention
-* ctrl + f --> ASSUMPTION! for modelling assumptions
+* ctrl + f --> TODO! for coding;
+* ctrl + f --> NOTE! something over which we must pay attention;
+* ctrl + f --> ASSUMPTION! when assumptions are introduced;
 * 
 %}
 
@@ -21,7 +21,7 @@ packet = randi([0 1], packetLength, 1); %column vector not row for applying
 interleaverIndices = randperm(packetLength);
 % Turbo encoder rate 1/3, (it is the standard)
 % Use as "InterleaverIndices" the one defined above
-turboEnc = comm.TurboEncoder('InterleaverIndices', interleaverIndices); 
+turboEnc = comm.TurboEncoder('InterleaverIndices', interleaverIndices);
 % Coding
 encodedPacket = turboEnc(packet);
 
@@ -59,11 +59,11 @@ numPaddingBits = bitsPerBurst*numBursts - numEncodedBits;
 % padding the encoded packet with #numPaddingBits zeros added at the end
 % NOTE! the Rx MUST "unpad" the received packet
 encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
-% (144 x numBursts) matrix keeping the order of bits 
+% (144 x numBursts) matrix keeping the order of bits
 bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
 
 %% 16 sync reference bits, 16 phase reference bits, 5 indexing bits 
-% the sync and the reference bits remain fixed for each burst
+% the sync and the reference bits remain fixed for all bursts
 syncReference  = randi([0 1], 16, 1);   % 16 synchronization bits
 phaseReference = randi([0 1], 16, 1);   % 16 phase reference bits
 % integer superior part of the log2 --> add minimum number of indexing bits
@@ -78,7 +78,7 @@ for k = 1:numBursts
     % vertical concatenation of three vectors
         syncReference;        % 16 bit
         phaseReference;       % 16 bit
-        burstIndexBits;       % 5 bit: identificativo burst
+        burstIndexBits;       % 5 bit: burst identifier
         bursts(:,k)           % 144 bit coded, from column k
     ];
 end
@@ -214,7 +214,7 @@ end
 % parameters
 numFrequencyChannels = 6;
 symbolRate = 13e6; % 13MHz
-symbolsPerBurstWithCP = 77;
+symbolsPerBurstWithCP = size(txSCFDEBursts,1);
 dutyCycle = 0.25; 
 fMin = 1435e6;
 fMax = 1518e6;
@@ -227,11 +227,26 @@ channelBandwidth = (fMax - fMin) / numFrequencyChannels;
 carrierFrequencies = fMin + channelBandwidth/2 + ...
     (0:numFrequencyChannels-1)*channelBandwidth; % list comprehension (0:i)
 % Time-frequency hopping pattern
-rng();   % results reproducibility
+rng();   % if you want results reproducibility insert a number
 timeSlots = 1:numBursts; % vector column
 % Random offset inside each slot
 maxOffset = slotDuration - burstTxTime;
-intraSlotOffset = rand(numBursts,1) * maxOffset;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%{
+This block is required in order to better cope with the tails introduced by
+the Pulse Shaping Filters. But since with a simple simulation I found out
+that actually the results do not really change, I have decided to comment
+it and keep the simple older implementation, in which a burst could be
+transmitted even in the final edge of its timeSlot.
+
+shapedBurstTime = ...
+    (77 + 12) / 13e6;
+maxOffset = slotDuration - shapedBurstTime;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%}
+
+intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
 % array of values between 1 and #numFrequencyChannles of length #numBursts
 frequencyChannels = randi( ...
     [1 numFrequencyChannels], ...
@@ -270,28 +285,43 @@ end
 
 %% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
-% baseband, we must use: sapmlesPerSymbol > 2*(fmax_occupied)/symbolRate
+% baseband, we must use: samplesPerSymbol > 2*(fmax_occupied)/symbolRate
 % in which fmax_occupied = [max(relativeCarrierFrequencies) +
 % (relativeCarrierFrequencies(6) - relativeCarrierFrequencies(5))]
+% Atually, with RRC the one-sided band of a single channel is: 
+% Bsingle = symbolRate/2 * (1 + rolloff) --> hence fmax_occupied is less.
+% NOTE! see: https://en.wikipedia.org/wiki/Raised-cosine_filter for time
+% and frequency domain plots, for a better understanding of RRC. RRC makes
+% symbols extremely overlap over the time, but thanks to the first Nyquist
+% criterion for pulse shaping filters, exactly in the sampling points the
+% interferers are equal to zero.
 samplesPerSymbol = 8; % number of samples per symbol
+% sample rate --> how much finely we represent the waveform over the time.
+% symbol rate --> how quick the info changes.
 Fs = symbolRate * samplesPerSymbol; % sampling frequency
 % Configuration of Root Raised Cosine TX Filter
 rolloff = 0.35; % how much extra band we use
-filterSpan = 12; % filter duration in symbols
+% NOTICE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
+% IF we transmit simultaneously multiple bursts per time slot we could
+% experience ACI, since our channel spacing is roughly 13.83 MHz --> set
+% rolloff accordingly
+filterSpan = 12; % filter duration in symbols, NOTE! the longer it lasts
+% over time, the sharper it is over the frequencies.
 txRRC = comm.RaisedCosineTransmitFilter( ...
     'Shape','Square root', ...
     'RolloffFactor',rolloff, ...
     'FilterSpanInSymbols',filterSpan, ...
-    'OutputSamplesPerSymbol',samplesPerSymbol);
+    'OutputSamplesPerSymbol',samplesPerSymbol); % how many samples it 
+% outputs per symbol the RRC
 totalFilterDelaySymbols = filterSpan;
 totalTime = max(endTimes); % final time for transmitting the whole packet 
 % (last burst)
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
-extraSymbols = filterSpan; % due to Pulse Shaping Filter tails
-samplesPerShapedBurst = ...
-    (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
-numSamplesTotal = ceil(totalTime * Fs) + samplesPerShapedBurst + 1; % +1 
-% for safety reasons
+extraSymbols = filterSpan; % Extra zero symbols appended to flush the TX/RX 
+% pulse-shaping filters.
+tailSamples = filterSpan * samplesPerSymbol; % tail extention in samples 
+numSamplesTotal = ceil(totalTime * Fs) + tailSamples + 1; % +1 for safety 
+% reasons
 txSignal = zeros(numSamplesTotal,1);
 % we move to baseband, to avoid computational overheads of L-band (Nyquist)
 fCenter = mean(carrierFrequencies);
@@ -299,12 +329,14 @@ fCenter = mean(carrierFrequencies);
 relativeCarrierFrequencies = carrierFrequencies - fCenter;
 
 for k = 1:numBursts
-    reset(txRRC); % clean the filter
+    reset(txRRC); % clean the filter memory per each burst
     burstSymbols = txSCFDEBursts(:,k); % from where we sample
     % Add zeros to flush the TX/RX filter memory
     burstSymbolsPadded = [burstSymbols; zeros(extraSymbols,1)];
     % Pulse shaping
     shapedBurst = txRRC(burstSymbolsPadded);
+    % startTimes(k) indicates the beginning of the shaped TX waveform,
+    % not the sampling instant of the first useful symbol.
     startSample = round(startTimes(k)*Fs) + 1;  % initial sampling window
     % ending sampling window
     endSample = startSample + length(shapedBurst) - 1;
@@ -322,7 +354,7 @@ for k = 1:numBursts
         txSignal(startSample:endSample) + burstUpconverted;
 end
 
-%{
+%{%}
 %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter
 % pulse shaping filter Rx
 rxRRC = comm.RaisedCosineReceiveFilter( ...
@@ -330,7 +362,8 @@ rxRRC = comm.RaisedCosineReceiveFilter( ...
     'RolloffFactor',rolloff, ...
     'FilterSpanInSymbols',filterSpan, ...
     'InputSamplesPerSymbol',samplesPerSymbol, ...
-    'DecimationFactor',samplesPerSymbol);
+    'DecimationFactor',samplesPerSymbol); % after filtering keep one sample 
+    % every #samlpesPerSymbol
 
 rxSignal = txSignal; % ASSUMPTION! ideal channel
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
@@ -338,7 +371,9 @@ for k = 1:numBursts
     reset(rxRRC); % clean the filter
     % Same time window used at transmitter
     startSample = round(startTimes(k)*Fs) + 1;
-    % Notice that this is different from Tx, since there was repelem
+    % Notice that this is different from Tx
+    samplesPerShapedBurst = ...
+    (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
     endSample = startSample + samplesPerShapedBurst - 1;
     % Extract received burst samples
     rxBurstUpconverted = rxSignal(startSample:endSample);
@@ -350,6 +385,7 @@ for k = 1:numBursts
     % Downconversion: bring burst back to baseband
     rxBurstBaseband = rxBurstUpconverted .* exp(-1j*2*pi*fRel*t);
     % Matched filter + downsampling (from samples we go back to symbols)
+    % The matched filtering is declined to the waveform not to preamble!
     rxBurstSymbolsPadded = rxRRC(rxBurstBaseband);
     % Remove total TX+RX filter delay
     rxBurstSymbols = rxBurstSymbolsPadded( ...
@@ -364,5 +400,5 @@ errMax = max(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)));
 errRMS = sqrt(mean(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)).^2));
 fprintf('Max error: %.3e\n', errMax);
 fprintf('RMS error: %.3e\n', errRMS);
-%}
+
 
