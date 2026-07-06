@@ -370,73 +370,78 @@ fprintf('RMS error: %.3e\n', errRMS);
 %}
 
 
-%% GENIE-AIDED Channel Estimation
-% channel estimation as a matrix containing 28 fictitious burst, sent on
-% the freq_rel used exactly by the real bursts in the proper order. It is 
-% crucial the dependency on the frequency, if the channel introduces a 
-% delay (multipath), in reception we obtain a phase rotation that STRICTLY 
-% DEPENDS ON THE HOPPING CHANNEL. The same multipath seen on different
-% frequencies produces different responses
+%% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
+%% SC-FDE Demodulation with ZF Equalization
 N = symbolsPerBurst;
 Ncp = cpLength;
-H_eff_bursts = zeros(N, numBursts);
-for k = 1:numBursts
-    fRel = relativeCarrierFrequencies(frequencyChannels(k));
-    x_imp = zeros(N + Ncp, 1);
-    x_imp(Ncp + 1) = 1; % add just 1, for Dirac Pulse in order to measure 
-    % the impulse response of the system
-    reset(txRRC);
-    reset(rxRRC);
-    x_imp_padded = [x_imp; zeros(extraSymbols,1)];
-    tx_imp = txRRC(x_imp_padded);
-    n = (0:length(tx_imp)-1).';
-    t = n/Fs;
-    tx_imp_up = tx_imp .* exp(1j*2*pi*fRel*t);
-    rx_imp_up = filter(h, 1, tx_imp_up);
-    rx_imp_bb = rx_imp_up .* exp(-1j*2*pi*fRel*t);
-    rx_imp_symbols_padded = rxRRC(rx_imp_bb);
-    rx_imp_symbols = rx_imp_symbols_padded( ...
-        totalFilterDelaySymbols + 1 : ...
-        totalFilterDelaySymbols + Ncp + N);
-    h_eff_cp = rx_imp_symbols;
-    h_eff = h_eff_cp(Ncp+1:end);
-    H_eff_bursts(:,k) = fft(h_eff, N);
-end
+% Known pilot bits available in each burst
+knownPilotBits = [syncReference; phaseReference];
+knownPilotSymbols = modulatedBursts(...
+    1:floor(length(knownPilotBits)/bitsPerSymbol), 1);
+numPilotSymbols = length(knownPilotSymbols);
 
+% NOTE! the pilot tones (symbols) must be >> number of taps (Lest). 
+% Currenlty the way it is does not really satisfy this. there are two 
+% possible ways to operate:
+% 1. Use dedicated Pilot Bursts as used in the current LinkLevelPHY.m file
+% 2. Augment the length of the sync and reference bits, at least covering a
+% total of 16-32 symbols (not 10 as it is now).
+% by doing so you will notice a strong decrease in numErrors8PSK even with
+% higher AWGN.
+% Length ESTimate
+Lest = 3; % length of the discrete impulsive response we want to estimate. 
+% it represents #Lest taps at symbols level, hence we estimate the channel 
+% memory length in symbols, hence it is totally different from what we did 
+% in the Channel implementation before the RRC RX. Indeed we are doing this
+% after the RRC RX
 
-
-
-%% SC-FDE Demodulation + MMSE based on the Simple Channel FFT Response
-
-% frequency response of the channel, padded so to get the same number of
-% bins in output desired for the element wise operations per symbolPerBurst
-% H = H_eff;
-
-% MMSE equalizer
-% NOTE!  in this first implementation we do not estimate the channel!
-% ./ element-wise division, abs(H).^2 squared modulus of H --> channel
-% power for each frequency
-% Wmmse = conj(H) ./ (abs(H).^2 + noiseVar);
-
-% Remove CP + equalization MMSE
-rxEqualizedBursts = zeros(symbolsPerBurst, numBursts);
-for k = 1:numBursts
-    
-    H = H_eff_bursts(:,k); % take the matrix of channel estimation in the 
-    % proper column pointing the fictitious burst used for channel 
-    % estimation on the current proper freq_rel used by the real burst now
-
-    W = 1 ./ H;   % for debug SNR = 100 dB, Zero Forcing equalizer
-
+rxEqualizedBursts = zeros(symbolsPerBurst, numBursts); % equalized bursts
+H_est_bursts = zeros(N, numBursts); % channel estimation in frequency
+h_est_bursts = zeros(Lest, numBursts); % channel estimation in time
+for k = 1:numBursts % cycle over all bursts
     rxBurstCP = rxSCFDEBursts(:,k);
-    % Remove cyclic prefix
+    % Remove CP
     rxBurst = rxBurstCP(cpLength+1 : cpLength+symbolsPerBurst);
-    % FFT
-    Y = fft(rxBurst, symbolsPerBurst);
-    % Frequency-domain ZF equalization, .* element-wise multiplication
-    Xhat = W .* Y; % burt estimation in the frequency domain
-    % IFFT: go back to the symbol 8-PSK
-    rxEqualizedBursts(:,k) = ifft(Xhat, symbolsPerBurst);
+    % Received known pilot portion
+    rxPilot = rxBurst(1:numPilotSymbols);
+    % Build Least Squares matrix:
+    % rxPilot(n) ≈ h(1)*x(n) + h(2)*x(n-1) + ... means that we are
+    % modelling the received symbols as convoluted with the channel
+    numRows = numPilotSymbols - Lest + 1; % how many equations we construct 
+    % using the pilots in order to estimate the taps (Lest)
+    A = zeros(numRows, Lest); % "A" matrix containing the known pilots for 
+    % channel estimate
+    y = zeros(numRows, 1); % vector of the corresponding received samples
+
+    row = 1; % initialize the index of the current row of matrix A
+    for n = Lest:numPilotSymbols % to build a row we need x(n), x(n-1), 
+        % x(n-2). this is the reason why we start from Lest
+        for ell = 0:Lest-1 % cycle over the delays of the channel
+            A(row, ell+1) = knownPilotSymbols(n-ell); % "A" contains the 
+            % known transmitted pilots put in a convoluted form
+        end
+        y(row) = rxPilot(n); % pilot symbol received at time n
+        row = row + 1;
+    end
+
+    % Least Squares channel estimate, since we have more equations than
+    % unknown variables.
+    h_hat = A \ y; % solves the system: A * h_hat ≈ y, hence we get the 
+    % estimates of the channel from our knonw pilots
+    h_est_bursts(:,k) = h_hat; % saves the times response estimates by 
+    % burst k
+    % Convert time-domain channel estimate to frequency domain
+    h_hat_padded = [h_hat; zeros(N-Lest,1)];
+    H_hat = fft(h_hat_padded, N); % channel frequency response
+    H_est_bursts(:,k) = H_hat; % saves the frequency response estimates by 
+    % burst k
+    % SC-FDE Equalization
+    Y = fft(rxBurst, N);
+    % ZF with protection against very small H
+    epsFloor = 1e-6;
+    W = conj(H_hat) ./ (abs(H_hat).^2 + epsFloor);
+    Xhat = W .* Y; % equalization
+    rxEqualizedBursts(:,k) = ifft(Xhat, N);
 end
 
 
@@ -461,9 +466,8 @@ rxFramedBursts = rxFramedBurstsPadded( ...
     1:end-numPadBits8PSK, ...
     :);
 % check for the errors Tx - Rx
-%{
-numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:));
-%}
+%{%}
+numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:))
 
 
 %% Turbo decoder
@@ -502,4 +506,4 @@ decodedPacket = turboDec(rxSoft);
 
 % Just to compare
 %{%}
-numErrors = sum(packet ~= decodedPacket)
+numFinalErrors = sum(packet ~= decodedPacket)

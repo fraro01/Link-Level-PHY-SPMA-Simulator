@@ -282,11 +282,11 @@ end
 %                           SIMPLE CHANNEL                                %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% example of simple multipath channel, column vector, three taps, IT WORKS
-% ON TH SAMPLES, NOT ON THE SYMBOLS
-h = [0.9];      % LOS
-    % 0.4+0.2j;  % echo 1
-    % 0.2-0.1j]; % echo 2
+% example of simple multipath channel, column vector, three taps,
+% IT WORKS ON THE SAMPLES, NOT ON THE SYMBOLS, the channel sees samples
+h = [0.9;       % LOS
+     0.4+0.2j;  % echo 1
+     0.2-0.1j]; % echo 2
 
 % Apply channel response as a convolution without retroaction as a FIR 
 % between the Tx signal and the channel.
@@ -302,7 +302,7 @@ SNRlin = 10^(SNRdB/10); % converts the above SNR from dB to linear value
 % Noise variance necessary to obtain the desired SNR set above
 active = abs(rxSignal) > 1e-12; % it stores 1 and 0 (True/False)
 signalPower = mean(abs(rxSignal(active)).^2); % calculates signal power
-% only for non-zeros symbols
+% only for non-zeros symbols, thanks to threshopld set above (1e-12)
 noiseVar = signalPower / SNRlin; % NOTE! the noiseVar, based on the above 
 % formulas is the P_noise, For zero-mean noise, average power equals 
 % variance.
@@ -311,10 +311,6 @@ noise = sqrt(noiseVar/2) * ... % complex noise, divided by 2, because the varian
 % randn generates gaussian noise with mean 0 and variance 1
 
 rxSignal = rxSignal + noise; % add noise to the attenuated received signal
-
-% frequency response of the channel, padded so to get the same number of
-% bins in output desired for the element wise operations per symbolPerBurst
-H = fft(h, symbolsPerBurst).';
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                        END SIMPLE CHANNEL                               %
@@ -374,23 +370,62 @@ fprintf('RMS error: %.3e\n', errRMS);
 %}
 
 
-%% SC-FDE Demodulation + MMSE based on the Simple Channel FFT Response
-% MMSE equalizer
-% NOTE!  in this first implementation we do not estimate the channel!
-% ./ element-wise division, abs(H).^2 squared modulus of H --> channel
-% power for each frequency
-Wmmse = conj(H) ./ (abs(H).^2 + noiseVar);
+%% GENIE-AIDED Channel Estimation
+% we are basically sending dedicated pilot bursts!
+% channel estimation as a matrix containing 28 fictitious burst, sent on
+% the freq_rel used exactly by the real bursts in the proper order. It is 
+% crucial the dependency on the frequency, if the channel introduces a 
+% delay (multipath), in reception we obtain a phase rotation that STRICTLY 
+% DEPENDS ON THE HOPPING CHANNEL. The same multipath seen on different
+% frequencies produces different responses
+N = symbolsPerBurst;
+Ncp = cpLength;
+H_eff_bursts = zeros(N, numBursts);
+for k = 1:numBursts
+    fRel = relativeCarrierFrequencies(frequencyChannels(k));
+    x_imp = zeros(N + Ncp, 1);
+    x_imp(Ncp + 1) = 1; % add just 1, for Dirac Pulse in order to measure 
+    % the impulse response of the system. The Dirac Pulse contains energy
+    % distibuited over all the frequencies after the FFT. Thanks to a
+    % single pulse we "illuminate" all the frequencies of the channel.
+    % NOTE! For a proper and rigorous estimate of the channel in SC-FDE we 
+    % need: pilotSymbols ≈ length of the burst
+    reset(txRRC);
+    reset(rxRRC);
+    x_imp_padded = [x_imp; zeros(extraSymbols,1)];
+    tx_imp = txRRC(x_imp_padded);
+    n = (0:length(tx_imp)-1).';
+    t = n/Fs;
+    tx_imp_up = tx_imp .* exp(1j*2*pi*fRel*t);
+    rx_imp_up = filter(h, 1, tx_imp_up);
+    rx_imp_bb = rx_imp_up .* exp(-1j*2*pi*fRel*t);
+    rx_imp_symbols_padded = rxRRC(rx_imp_bb);
+    rx_imp_symbols = rx_imp_symbols_padded( ...
+        totalFilterDelaySymbols + 1 : ...
+        totalFilterDelaySymbols + Ncp + N);
+    h_eff_cp = rx_imp_symbols;
+    h_eff = h_eff_cp(Ncp+1:end);
+    H_eff_bursts(:,k) = fft(h_eff, N); % here the channel response WORKS ON 
+    % THE SYMBOLS, NOT ON SAMPLES; opposed as before on the channel 
+    % response on the RRC real TX signal with filter
+end
 
+
+%% SC-FDE Demodulation + MMSE based on the Simple Channel FFT Response
 % Remove CP + equalization MMSE
 rxEqualizedBursts = zeros(symbolsPerBurst, numBursts);
 for k = 1:numBursts
+    H = H_eff_bursts(:,k); % take the matrix of channel estimation in the 
+    % proper column pointing the fictitious burst used for channel 
+    % estimation on the current proper freq_rel used by the real burst now
+    W = 1 ./ H;   % for debug SNR = 100 dB, Zero Forcing equalizer
     rxBurstCP = rxSCFDEBursts(:,k);
     % Remove cyclic prefix
     rxBurst = rxBurstCP(cpLength+1 : cpLength+symbolsPerBurst);
     % FFT
     Y = fft(rxBurst, symbolsPerBurst);
-    % Frequency-domain MMSE equalization, .* element-wise multiplication
-    Xhat = Wmmse .* Y; % burt estimation in the frequency domain
+    % Frequency-domain ZF equalization, .* element-wise multiplication
+    Xhat = W .* Y; % burt estimation in the frequency domain
     % IFFT: go back to the symbol 8-PSK
     rxEqualizedBursts(:,k) = ifft(Xhat, symbolsPerBurst);
 end
@@ -417,9 +452,9 @@ rxFramedBursts = rxFramedBurstsPadded( ...
     1:end-numPadBits8PSK, ...
     :);
 % check for the errors Tx - Rx
-%{
-numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:));
-%}
+%{%}
+numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:))
+
 
 
 %% Turbo decoder
@@ -458,4 +493,4 @@ decodedPacket = turboDec(rxSoft);
 
 % Just to compare
 %{%}
-numErrors = sum(packet ~= decodedPacket)
+numFinalErrors = sum(packet ~= decodedPacket)
