@@ -28,7 +28,7 @@ packet = randi([0 1], packetLength, 1); %column vector not row for applying
 % NOTE! study the turbo coding functionings
 % Interleaver turbo
 interleaverIndices = randperm(packetLength);
-% Turbo encoder rate 1/3, (it is the standard)
+% Turbo encoder rate 1/3, (it is the default)
 % Use as "InterleaverIndices" the one defined above
 turboEnc = comm.TurboEncoder('InterleaverIndices', interleaverIndices);
 % Coding
@@ -47,7 +47,7 @@ numPaddingBits = bitsPerBurst*numBursts - numEncodedBits;
 % padding the encoded packet with #numPaddingBits zeros added at the end
 % NOTE! the Rx MUST "unpad" the received packet
 encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
-% (144 x numBursts) matrix keeping the order of bits
+% (bitsPerBurst x numBursts) matrix keeping the order of bits
 bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
 
 
@@ -56,7 +56,7 @@ bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
 syncReference  = randi([0 1], 16, 1);   % 16 synchronization bits
 phaseReference = randi([0 1], 16, 1);   % 16 phase reference bits
 % integer superior part of the log2 --> add minimum number of indexing bits
-numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing bursts
+numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
 framedBursts = zeros(bitsPerBurst + 16 + 16 + numIndexBits, numBursts);
 for k = 1:numBursts
@@ -146,8 +146,8 @@ timeSlots = 1:numBursts; % vector column
 % Random offset inside each slot
 maxOffset = slotDuration - burstTxTime;
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %{
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 This block is required in order to better cope with the tails introduced by
 the Pulse Shaping Filters. But since with a simple simulation I found out
 that actually the results do not really change, I have decided to comment
@@ -214,7 +214,9 @@ end
 samplesPerSymbol = 8; % number of samples per symbol
 % sample rate --> how much finely we represent the waveform over the time.
 % symbol rate --> how quick the info changes.
-Fs = symbolRate * samplesPerSymbol; % sampling frequency
+Fs = symbolRate * samplesPerSymbol; % sampling frequency, since we are 
+% constructing the signal from the symbol to the the continuous time domain 
+% we need more samples to represent one symbol.
 % Configuration of Root Raised Cosine TX Filter
 rolloff = 0.35; % how much extra band we use
 % NOTICE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
@@ -280,30 +282,35 @@ end
 %                           SIMPLE CHANNEL                                %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Flat channel: attenuation only, no multipath
-h = 0.9;   % attenuation factor
+% example of simple multipath channel, column vector, three taps,
+% IT WORKS ON THE SAMPLES, NOT ON THE SYMBOLS, the channel sees samples
+h = [0.9;       % LOS
+     0.4+0.2j;  % echo 1
+     0.2-0.1j]; % echo 2
 
-% Apply channel
+% Apply channel response as a convolution without retroaction as a FIR 
+% between the Tx signal and the channel.
 rxSignal = filter(h, 1, txSignal);
 
 % AWGN
-SNRdB = 20;
-SNRlin = 10^(SNRdB/10);
+SNRdB = 100; % signal to noise ratio in dB (P_signal/P_noise), but power 
+% calculus are usually performed linearly...
+SNRlin = 10^(SNRdB/10); % converts the above SNR from dB to linear value 
+% "the signal is SNRlin times greater than the noise."
 
-% Measure actual signal power after attenuation
-% Noise variance to obtain desired SNR
-active = abs(rxSignal) > 0;
-signalPower = mean(abs(rxSignal(active)).^2);
-noiseVar = signalPower / SNRlin;
+% Measure actual signal power only after channel effects
+% Noise variance necessary to obtain the desired SNR set above
+active = abs(rxSignal) > 1e-12; % it stores 1 and 0 (True/False)
+signalPower = mean(abs(rxSignal(active)).^2); % calculates signal power
+% only for non-zeros symbols, thanks to threshopld set above (1e-12)
+noiseVar = signalPower / SNRlin; % NOTE! the noiseVar, based on the above 
+% formulas is the P_noise, For zero-mean noise, average power equals 
+% variance.
+noise = sqrt(noiseVar/2) * ... % complex noise, divided by 2, because the variance gets divided between Re and Im
+    (randn(size(rxSignal)) + 1j*randn(size(rxSignal))); % complex noise
+% randn generates gaussian noise with mean 0 and variance 1
 
-noise = sqrt(noiseVar/2) * ...
-    (randn(size(rxSignal)) + 1j*randn(size(rxSignal)));
-
-rxSignal = rxSignal + noise;
-
-% frequency response of the channel, padded so to get the same number of
-% bins in output desired for the element wise operations per symbolPerBurst
-H = fft(h, symbolsPerBurst);
+rxSignal = rxSignal + noise; % add noise to the attenuated received signal
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                        END SIMPLE CHANNEL                               %
@@ -363,27 +370,71 @@ fprintf('RMS error: %.3e\n', errRMS);
 %}
 
 
+%% GENIE-AIDED Channel Estimation
+% channel estimation as a matrix containing 28 fictitious burst, sent on
+% the freq_rel used exactly by the real bursts in the proper order. It is 
+% crucial the dependency on the frequency, if the channel introduces a 
+% delay (multipath), in reception we obtain a phase rotation that STRICTLY 
+% DEPENDS ON THE HOPPING CHANNEL. The same multipath seen on different
+% frequencies produces different responses
+N = symbolsPerBurst;
+Ncp = cpLength;
+H_eff_bursts = zeros(N, numBursts);
+for k = 1:numBursts
+    fRel = relativeCarrierFrequencies(frequencyChannels(k));
+    x_imp = zeros(N + Ncp, 1);
+    x_imp(Ncp + 1) = 1; % add just 1, for Dirac Pulse in order to measure 
+    % the impulse response of the system
+    reset(txRRC);
+    reset(rxRRC);
+    x_imp_padded = [x_imp; zeros(extraSymbols,1)];
+    tx_imp = txRRC(x_imp_padded);
+    n = (0:length(tx_imp)-1).';
+    t = n/Fs;
+    tx_imp_up = tx_imp .* exp(1j*2*pi*fRel*t);
+    rx_imp_up = filter(h, 1, tx_imp_up);
+    rx_imp_bb = rx_imp_up .* exp(-1j*2*pi*fRel*t);
+    rx_imp_symbols_padded = rxRRC(rx_imp_bb);
+    rx_imp_symbols = rx_imp_symbols_padded( ...
+        totalFilterDelaySymbols + 1 : ...
+        totalFilterDelaySymbols + Ncp + N);
+    h_eff_cp = rx_imp_symbols;
+    h_eff = h_eff_cp(Ncp+1:end);
+    H_eff_bursts(:,k) = fft(h_eff, N);
+end
+
+
+
+
 %% SC-FDE Demodulation + MMSE based on the Simple Channel FFT Response
+
+% frequency response of the channel, padded so to get the same number of
+% bins in output desired for the element wise operations per symbolPerBurst
+% H = H_eff;
+
 % MMSE equalizer
 % NOTE!  in this first implementation we do not estimate the channel!
 % ./ element-wise division, abs(H).^2 squared modulus of H --> channel
 % power for each frequency
-
-% TODO! for simple equalization with only LOS, it must be replaced
-H = h*ones(symbolsPerBurst, 1);
-
-Wmmse = conj(H) ./ (abs(H).^2 + noiseVar);
+% Wmmse = conj(H) ./ (abs(H).^2 + noiseVar);
 
 % Remove CP + equalization MMSE
 rxEqualizedBursts = zeros(symbolsPerBurst, numBursts);
 for k = 1:numBursts
+    
+    H = H_eff_bursts(:,k); % take the matrix of channel estimation in the 
+    % proper column pointing the fictitious burst used for channel 
+    % estimation on the current proper freq_rel used by the real burst now
+
+    W = 1 ./ H;   % for debug SNR = 100 dB, Zero Forcing equalizer
+
     rxBurstCP = rxSCFDEBursts(:,k);
     % Remove cyclic prefix
     rxBurst = rxBurstCP(cpLength+1 : cpLength+symbolsPerBurst);
     % FFT
     Y = fft(rxBurst, symbolsPerBurst);
-    % Frequency-domain MMSE equalization, .* element-wise multiplication
-    Xhat = Wmmse .* Y; % burt estimation in the frequency domain
+    % Frequency-domain ZF equalization, .* element-wise multiplication
+    Xhat = W .* Y; % burt estimation in the frequency domain
     % IFFT: go back to the symbol 8-PSK
     rxEqualizedBursts(:,k) = ifft(Xhat, symbolsPerBurst);
 end
@@ -414,38 +465,33 @@ rxFramedBursts = rxFramedBurstsPadded( ...
 numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:));
 %}
 
-%% Random burst loss simulation
-numLostBursts = 3;                     % choose manually
-lostBurstIdx = randperm(numBursts, numLostBursts);
-fprintf('Lost bursts: ');
-fprintf('%d ', lostBurstIdx);
-fprintf('\n');
 
-%% Recover encoded packet from bursts
+%% Turbo decoder
+% Random burst loss simulation
+numLostBursts = 0;                     % choose manually
+lostBurstIdx = randperm(numBursts, numLostBursts);
+% Recover encoded packet from bursts
 headerLength = length(syncReference) + ...
                length(phaseReference) + ...
                numIndexBits;
-rxBurstsPayload = ...
-    rxFramedBursts(headerLength+1:end,:);
-rxEncodedPacketPadded = ...
-    reshape(rxBurstsPayload,[],1);
-rxEncodedPacket = ...
-    rxEncodedPacketPadded(1:numEncodedBits);
+rxBurstsPayload = rxFramedBursts(headerLength+1:end,:); % remove headers
+rxEncodedPacketPadded = reshape(rxBurstsPayload,[],1); % stack into column
+rxEncodedPacket = rxEncodedPacketPadded(1:numEncodedBits); % leave padding
 
-
-%% Turbo decoder
 % Ideal Channel: No noise
-%The decoder does not want bit 0/1, instead soft values.
+% The decoder does not want bit 0/1, instead soft values.
 % Typical convention:
 % bit 0 -> -1
 % bit 1 -> +1
 rxSoft = 2*double(rxEncodedPacket) - 1;
 
 payloadBitsPerBurst = size(rxBurstsPayload,1);
-for b = lostBurstIdx
-    firstBit = (b-1)*payloadBitsPerBurst + 1;
-    lastBit  = min(b*payloadBitsPerBurst, numEncodedBits);
-    rxSoft(firstBit:lastBit) = 0;
+for b = lostBurstIdx % iterate over erased bursts
+    firstBit = (b-1)*payloadBitsPerBurst + 1; % take also the first burst, 
+    % hence 0, furthermore MATLAB starts from 1 not 0 
+    lastBit  = min(b*payloadBitsPerBurst, numEncodedBits); % handle also 
+    % the case of the last burst in which there was padding (minimum len)
+    rxSoft(firstBit:lastBit) = 0; % set these bits to zero
 end
 
 % numIterations = 6; the default is 6
