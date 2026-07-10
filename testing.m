@@ -54,13 +54,13 @@ bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
 %% 16 sync reference bits, 16 phase reference bits, 5 indexing bits
 % the sync and the reference bits remain fixed for all bursts
 rng(1); % fixed seed to keep fixed only the two random variables below
-syncReference  = randi([0 1], 16, 1);   % 16 synchronization bits
-phaseReference = randi([0 1], 16, 1);   % 16 phase reference bits
+syncReference  = randi([0 1], 48, 1);   % 16 synchronization bits
+phaseReference = randi([0 1], 48, 1);   % 16 phase reference bits
 rng('shuffle'); % come back to random sequence for all rest of the script
 % integer superior part of the log2 --> add minimum number of indexing bits
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
-framedBursts = zeros(bitsPerBurst + 16 + 16 + numIndexBits, numBursts);
+framedBursts = zeros(bitsPerBurst + 48 + 48 + numIndexBits, numBursts);
 for k = 1:numBursts
     % decimal to binary, with numIndexBits as #bits of result, most
     % significant bit is put left (used in TLC), then we transpose it: .'
@@ -326,48 +326,157 @@ rxSignal = rxSignal + noise; % add noise to the attenuated received signal
 %                             RECEIVER                                    %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Known Sync Symbols available in each burst for Synchronization
-numSyncSymbols = floor(length(syncReference)/bitsPerSymbol);
-knownSyncSymbols = modulatedBursts(1:numSyncSymbols, 1);
-
 %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
-% pulse shaping filter Rx
-rxRRC = comm.RaisedCosineReceiveFilter( ...
-    'Shape','Square root', ...
-    'RolloffFactor',rolloff, ...
-    'FilterSpanInSymbols',filterSpan, ...
-    'InputSamplesPerSymbol',samplesPerSymbol, ...
-    'DecimationFactor',samplesPerSymbol); % after filtering keep one sample 
-    % every #samlpesPerSymbol
+%% Realistic Burst Synchronization Using Preamble Correlation
+% The Rx knows:
+%   - "Slot" duration
+%   - Frequency hopping sequence
+%   - Sync symbols
+% The Rx DOES NOT know:
+%   - startTimes(k) hence the start time of transmission of each burst
+%   - intraSlotOffset(k) the offset of the bursts inside their own slot
+%   - the exact sample of burst start
+% numbers of complete symbols inside the syncReference
+numSyncSymbols = floor(length(syncReference) / bitsPerSymbol);
+% The first #numSyncSymbols of each burst are symbols for synchronization, 
+% and are equal for all bursts
+knownSyncSymbols = modulatedBursts(1:numSyncSymbols, 1);
+% Normalization of the preamble, so to render the metric less dependent on
+% the power received
+knownSyncSymbolsNormalized = knownSyncSymbols / ...
+    sqrt(sum(abs(knownSyncSymbols).^2));
 
+% RRC filter RX
+% NOTE!:
+% We do not decimate so far, because we still don't know the correct
+% temporal phase. Hence to output of this filter mantains #samplesPerSymbol
+% samples per symbol
+rxRRCsync = comm.RaisedCosineReceiveFilter( ... % pulse shaping filter RX
+    'Shape', 'Square root', ...
+    'RolloffFactor', rolloff, ...
+    'FilterSpanInSymbols', filterSpan, ...
+    'InputSamplesPerSymbol', samplesPerSymbol, ...
+    'DecimationFactor', 1);
+% where to store the syncohronized bursts
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
+% Set the threshold in between 0 e 1. The higher the amount of sync symbols 
+% the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
+syncDetectionThreshold = 0.55;
+% NOTE! this is the main external cycle that iterates over all the bursts
 for k = 1:numBursts
-    reset(rxRRC); % clean the filter
+    reset(rxRRCsync); % clean the filter
 
-    % Same time window used at transmitter
-    startSample = round(startTimes(k)*Fs) + 1;
+    % 1. EXTRACTION OF THE ENTIRE TIME SLOT
+    % We do not use startTimes(k).
+    % the RX looks at the whole slot k.
+    slotStartTime = (k-1) * slotDuration;
+    slotEndTime   = k * slotDuration;
+    slotStartSample = floor(slotStartTime * Fs) + 1;
+    slotEndSample   = min(ceil(slotEndTime * Fs), length(rxSignal));
+    rxSlotUpconverted = rxSignal(slotStartSample : slotEndSample);
 
-    % Notice that this is different from Tx
-    samplesPerShapedBurst = ...
-    (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
-    endSample = startSample + samplesPerShapedBurst - 1;
-    % Extract received burst samples
-    rxBurstUpconverted = rxSignal(startSample:endSample);
-    % Absolute temporal axis
-    n = (startSample-1:endSample-1).';
-    t = n/Fs;
-    % Relative carrier frequency used for this burst
-    fRel = relativeCarrierFrequencies(frequencyChannels(k));
-    % Downconversion: bring burst back to baseband
-    rxBurstBaseband = rxBurstUpconverted .* exp(-1j*2*pi*fRel*t);
-    % Matched filter + downsampling (from samples we go back to symbols)
-    % The matched filtering is declined to the waveform not to preamble!
-    rxBurstSymbolsPadded = rxRRC(rxBurstBaseband);
-    % Remove total TX+RX filter delay
-    rxBurstSymbols = rxBurstSymbolsPadded( ...
-        totalFilterDelaySymbols + 1 : ...
-        totalFilterDelaySymbols + symbolsPerBurstWithCP);
-    % Store recovered SC-FDE burst
+    % 2. DOWNCONVERSION
+    % RX knows the FH sequence. But doesn't know the exact time of start 
+    % burst
+    globalSampleIndices = (slotStartSample-1 : slotEndSample-1).';
+    tSlot = globalSampleIndices / Fs; % Fs = [samples/second], do the math
+    fRel = relativeCarrierFrequencies(frequencyChannels(k)); % FH scheme
+    % Downconversion bring the entire time slot back to baseband
+    rxSlotBaseband = rxSlotUpconverted .* exp(-1j * 2*pi * fRel * tSlot);
+
+    % 3. RCC FILTER WITHOUT DECIMATION
+    % The exit still keeps the #samplesPerSymbol samples per symbol
+    rxSlotMatched = rxRRCsync(rxSlotBaseband);
+
+    % 4. CORRELATION METRIC CALCULUS
+    % For each possible sample q, we take:
+    % q,
+    % q + samplesPerSymbol,
+    % q + 2*samplesPerSymbol,
+    % ...
+    % So to obtain a possible sequence of received symbols
+    % We confront it with: knownSyncSymbols.
+    numMatchedSamples = length(rxSlotMatched);
+    % the first sync symbol must have as header before itslef the whole CP,
+    % hence we go after the CP for position correlation.
+    firstCandidate = cpLength * samplesPerSymbol + 1;
+    % After the first sync symbol there must be available:
+    %   - All sync symbols;
+    %   - The whole rest part of the burst.
+    % In other words we are extracting the entire burst from its "slot".
+    lastCandidate = numMatchedSamples ...
+        - (symbolsPerBurstWithCP - cpLength - 1) * samplesPerSymbol; % here 
+    % we are taking the POSSIBLE LAST POSITION of the burst inside its slot 
+    % in terms of samples, starting directly AFTER the CP.
+    numCandidates = lastCandidate - firstCandidate + 1; % number of 
+    % candidated POSITIONS for starting the preamble (in samples)
+    syncMetric = zeros(numCandidates, 1);
+    for candidateIdx = 1:numCandidates
+        q = firstCandidate + candidateIdx - 1;
+        % possible samples of sync symbols 
+        syncSampleIndices = q + ...
+            (0:numSyncSymbols-1).' * samplesPerSymbol;
+        % Possible samples candidated
+        receivedSyncCandidate = ...
+            rxSlotMatched(syncSampleIndices);
+        % Local energy of the received sequence
+        receivedEnergy = sum( ...
+            abs(receivedSyncCandidate).^2);
+        % if the energy is above this threshold we proceed, otherwise no
+        if receivedEnergy > 1e-12
+            % normalize it, to compare with the normalized known sequence
+            receivedSyncNormalized = ...
+                receivedSyncCandidate / sqrt(receivedEnergy);
+            % Complex correlation normalized.
+            % the absolute value, renders the metric insensible to a phase
+            % rotation in common.
+            correlationValue = ...
+                knownSyncSymbolsNormalized' * receivedSyncNormalized; % the 
+            % knownSyncSymbolsNormalized' makes the conjugated transpose
+            syncMetric(candidateIdx) = abs(correlationValue)^2; % in order 
+            % to cope with phase rotation of the channel, the modulus
+            % reimans unchanged while the angle could change
+        end
+    end
+
+    % 5. LOOK FOR THE MAXIMUM CORRELATION
+    % take the maximum and its position
+    [bestMetric, bestCandidateIdx] = max(syncMetric);
+    % position of the first sync symbol in the output of the adapted filter
+    firstSyncSample = firstCandidate + bestCandidateIdx - 1;
+
+    % 6. DETECTION DECISION
+    if bestMetric < syncDetectionThreshold
+        warning( ...
+            ['Burst %d not detected: synchronization metric ' ...
+             '= %.3f.'], ...
+            k, ...
+            bestMetric);
+        continue;
+    end
+
+    % 7. FIND WHERE THE CP START
+    % The preamble is the first element after the CP
+    firstCPSample = firstSyncSample - cpLength * samplesPerSymbol;
+
+    % 8. EXTRACTION OF THE SYMBOLS OF THE BURST
+    % now we know both:
+    %   - tepmoral position;
+    %   - correct sampling phase.
+    % We sample a value each #samplePerSymbols samples
+    burstSampleIndices = firstCPSample + ...
+        (0:symbolsPerBurstWithCP-1).' * samplesPerSymbol;
+
+    if burstSampleIndices(1) < 1 || ... % || (or)
+        burstSampleIndices(end) > numMatchedSamples
+        warning( ...
+            'Burst %d detected, but not entirely contained in the slot.', ...
+            k);
+        continue;
+    end
+
+    rxBurstSymbols = ...
+        rxSlotMatched(burstSampleIndices);
     rxSCFDEBursts(:,k) = rxBurstSymbols;
 end
 
@@ -395,7 +504,7 @@ numPilotSymbols = length(knownPilotSymbols);
 % possible ways to operate:
 % 1. Use dedicated Pilot Bursts as used in the current LinkLevelPHY.m file
 % 2. Augment the length of the sync and reference bits, at least covering a
-% total of 16-32 symbols (not 10 as it is now).
+% total of 16-32 symbols.
 % by doing so you will notice a strong decrease in numErrors8PSK even with
 % higher AWGN.
 % Length ESTimate
