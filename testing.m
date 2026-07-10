@@ -51,10 +51,12 @@ encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
 bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
 
 
-%% 16 sync reference bits, 16 phase reference bits, 5 indexing bits 
+%% 16 sync reference bits, 16 phase reference bits, 5 indexing bits
 % the sync and the reference bits remain fixed for all bursts
+rng(1); % fixed seed to keep fixed only the two random variables below
 syncReference  = randi([0 1], 16, 1);   % 16 synchronization bits
 phaseReference = randi([0 1], 16, 1);   % 16 phase reference bits
+rng('shuffle'); % come back to random sequence for all rest of the script
 % integer superior part of the log2 --> add minimum number of indexing bits
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
@@ -126,7 +128,7 @@ end
 % pattern.
 % symbol rate = 13 MHz; maximum 17 MHz, use it as a hyperparameter
 % parameters
-numFrequencyChannels = 6;
+numFrequencyChannels = 4;
 symbolRate = 13e6; % 13MHz
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
 dutyCycle = 0.25; 
@@ -143,22 +145,22 @@ carrierFrequencies = fMin + channelBandwidth/2 + ...
 % Time-frequency hopping pattern
 rng();   % if you want results reproducibility insert a number
 timeSlots = 1:numBursts; % vector column
-% Random offset inside each slot
-maxOffset = slotDuration - burstTxTime;
 
-%{
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-This block is required in order to better cope with the tails introduced by
-the Pulse Shaping Filters. But since with a simple simulation I found out
-that actually the results do not really change, I have decided to comment
-it and keep the simple older implementation, in which a burst could be
-transmitted even in the final edge of its timeSlot.
-
+% Random offset inside each slot, without taking into account RRC tails in
+% which a burst could be transmitted even in the final edge of its timeSlot
+% maxOffset = slotDuration - burstTxTime;
+% The below definition of maxOffset better cope with the tails introduced 
+% by the Pulse Shaping Filters.
+filterSpan = 12; % RRC filter duration in symbols NOTE! the longer it lasts
+% over time, the sharper it is over the frequencies. 
+% I have defined it here, even though the RRC is implemented in the next
+% block. But it is essential to define it here in order to prevent the
+%  transmission of a burst to create tails that exceed their own allocated 
+% time slot.
 shapedBurstTime = ...
-    (77 + 12) / 13e6;
+    (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
 maxOffset = slotDuration - shapedBurstTime;
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%}
+
 
 intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
 % array of values between 1 and #numFrequencyChannles of length #numBursts
@@ -203,7 +205,7 @@ end
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
 % baseband, we must use: samplesPerSymbol > 2*(fmax_occupied)/symbolRate
 % in which fmax_occupied = [max(relativeCarrierFrequencies) +
-% (relativeCarrierFrequencies(6) - relativeCarrierFrequencies(5))]
+% (relativeCarrierFrequencies(4) - relativeCarrierFrequencies(3))]
 % Atually, with RRC the one-sided band of a single channel is: 
 % Bsingle = symbolRate/2 * (1 + rolloff) --> hence fmax_occupied is less.
 % NOTE! see: https://en.wikipedia.org/wiki/Raised-cosine_filter for time
@@ -223,8 +225,10 @@ rolloff = 0.35; % how much extra band we use
 % IF we transmit simultaneously multiple bursts per time slot we could
 % experience ACI, since our channel spacing is roughly 13.83 MHz --> set
 % rolloff accordingly
-filterSpan = 12; % filter duration in symbols, NOTE! the longer it lasts
-% over time, the sharper it is over the frequencies.
+% filterSpan = 12; filter duration in symbols, NOTE! the longer it lasts
+% over time, the sharper it is over the frequencies. I have commented it
+% since it has been already defined above for the TF-Hopping, so that a
+% burst transmission cannot happen at the very end of its time slot
 txRRC = comm.RaisedCosineTransmitFilter( ...
     'Shape','Square root', ...
     'RolloffFactor',rolloff, ...
@@ -322,6 +326,10 @@ rxSignal = rxSignal + noise; % add noise to the attenuated received signal
 %                             RECEIVER                                    %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% Known Sync Symbols available in each burst for Synchronization
+numSyncSymbols = floor(length(syncReference)/bitsPerSymbol);
+knownSyncSymbols = modulatedBursts(1:numSyncSymbols, 1);
+
 %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
 % pulse shaping filter Rx
 rxRRC = comm.RaisedCosineReceiveFilter( ...
@@ -335,8 +343,10 @@ rxRRC = comm.RaisedCosineReceiveFilter( ...
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 for k = 1:numBursts
     reset(rxRRC); % clean the filter
+
     % Same time window used at transmitter
     startSample = round(startTimes(k)*Fs) + 1;
+
     % Notice that this is different from Tx
     samplesPerShapedBurst = ...
     (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
@@ -376,8 +386,8 @@ N = symbolsPerBurst;
 Ncp = cpLength;
 % Known pilot bits available in each burst
 knownPilotBits = [syncReference; phaseReference];
-knownPilotSymbols = modulatedBursts(...
-    1:floor(length(knownPilotBits)/bitsPerSymbol), 1);
+numPilotSymbols = floor(length(knownPilotBits)/bitsPerSymbol);
+knownPilotSymbols = modulatedBursts(1:numPilotSymbols, 1);
 numPilotSymbols = length(knownPilotSymbols);
 
 % NOTE! the pilot tones (symbols) must be >> number of taps (Lest). 

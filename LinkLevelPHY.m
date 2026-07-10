@@ -1,4 +1,4 @@
-clc;
+sisi clc;
 clear;
 close all;
 
@@ -126,7 +126,7 @@ end
 % pattern.
 % symbol rate = 13 MHz; maximum 17 MHz, use it as a hyperparameter
 % parameters
-numFrequencyChannels = 6;
+numFrequencyChannels = 4;
 symbolRate = 13e6; % 13MHz
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
 dutyCycle = 0.25; 
