@@ -51,11 +51,11 @@ encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
 bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
 
 
-%% 16 sync reference bits, 16 phase reference bits, 5 indexing bits
+%% 48 sync reference bits, 48 phase reference bits, 5 indexing bits
 % the sync and the reference bits remain fixed for all bursts
 rng(1); % fixed seed to keep fixed only the two random variables below
-syncReference  = randi([0 1], 48, 1);   % 16 synchronization bits
-phaseReference = randi([0 1], 48, 1);   % 16 phase reference bits
+syncReference  = randi([0 1], 48, 1);   % 48 synchronization bits
+phaseReference = randi([0 1], 48, 1);   % 48 phase reference bits
 rng('shuffle'); % come back to random sequence for all rest of the script
 % integer superior part of the log2 --> add minimum number of indexing bits
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
@@ -67,8 +67,8 @@ for k = 1:numBursts
     burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
     framedBursts(:,k) = [ % take all rows of cloumn k
     % vertical concatenation of three vectors
-        syncReference;        % 16 bit
-        phaseReference;       % 16 bit
+        syncReference;        % 48 bit
+        phaseReference;       % 48 bit
         burstIndexBits;       % 5 bit: burst identifier
         bursts(:,k)           % 144 bit coded, from column k
     ];
@@ -362,6 +362,24 @@ rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
 % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
 syncDetectionThreshold = 0.55;
+
+% COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
+% Approximate desired power at the output of the Coarse AGC.
+% A power equal to 0.25 correspondes to an RMS amplitude of sqrt(0.25)=0.5
+% We do not use power=1, so to leave a certain margin to an eventual
+% saturation of RX.
+coarseTargetPower = 0.25;
+% Coarse gain limits.
+% the Coarse AGC can attenuate up to a factor of: 0.05
+% or amplify up to a factor of: 30.
+coarseMinGain = 0.05;
+coarseMaxGain = 30;
+% Fine gain limits.
+% The Fine AGC has to perform only a small final correction, because the
+% main part has been already corrected by the Coarse AGC.
+fineMinGain = 0.5;
+fineMaxGain = 2;
+
 % NOTE! this is the main external cycle that iterates over all the bursts
 for k = 1:numBursts
     reset(rxRRCsync); % clean the filter
@@ -382,11 +400,84 @@ for k = 1:numBursts
     tSlot = globalSampleIndices / Fs; % Fs = [samples/second], do the math
     fRel = relativeCarrierFrequencies(frequencyChannels(k)); % FH scheme
     % Downconversion bring the entire time slot back to baseband
-    rxSlotBaseband = rxSlotUpconverted .* exp(-1j * 2*pi * fRel * tSlot);
+    % raw because we still have to appli Coarse AGC
+    rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
+
+    % 2.1. SIMPLE COARSE AGC
+    % NOTE! it is not causal since the code read the whole slot, hence it
+    % takes advantage of of samples that will actually arrive in the
+    % future, but a real recevier cannot do this in reality in real time!
+    % instead it would update the gain sample by sample.
+    % AGC Coarse is required in order to bring the received signal in an
+    % amplitude interval compatible with the front-end of the RX, before
+    % synchronization.
+    % Put the coarse AGC after downconversion since it's easier in the
+    % equivalent-baseband, because AGC depends on the modulus of the
+    % signal, the frequency traslation does not modify amplitude.
+    % Calculate the istantaneous power of all the samples of the slot.
+    slotSamplePower = abs(rxSlotBasebandRaw).^2;
+    % The slot contains:
+    % - a part with the burst;
+    % - a part mainly with noise.
+    % In order to avoid that the long noise part lowers too much the 
+    % estimate, we only consider samples with relatively high power.
+    % the 75th percentile divides the samples as follow:
+    % - the 75% has power lower than the threshold;
+    % - the 25% has power higher than the threshold.
+    % NOTE! adjust the percentile based on the Duty Cycle set.
+    powerThreshold = prctile(slotSamplePower,75);
+    % Select the samples probaly belonging to the burst.
+    activeSamples = slotSamplePower >= powerThreshold; % array of: 1/0
+    % Safety check.
+    % Normally activeSamples contains at least 25% of samples.
+    % If for some unforseen reasons no sample is selected, we use the whole 
+    % slot to calculate the average.
+    if any(activeSamples) % if at least there is a: 1 in the array --> True
+        measuredCoarsePower = mean( ...
+            slotSamplePower(activeSamples));
+    else
+        measuredCoarsePower = mean(slotSamplePower);
+    end
+    % Calculate the required gain to obtain the objective power.
+    % Remember: power is the square of the amplitude --> sqrt()
+    % If:
+    % Pout = gain^2 * Pin
+    % Then:
+    % gain = sqrt(Pout / Pin)
+    coarseGain = sqrt( ...
+        coarseTargetPower / ...
+        max(measuredCoarsePower,1e-12));
+    % Limit the gain to the allowed interval.
+    coarseGain = min( ...
+        max(coarseGain,coarseMinGain), ...
+        coarseMaxGain);
+    % Apply the same gain to the whole slot.
+    rxSlotBaseband = coarseGain * rxSlotBasebandRaw;
+
+    %% SIMPLE ADC MODEL
+    adcNumBits = 10; % maximum number of available bits to represent values
+    adcFullScale = 1; % full scale, hence range: [-1;+1], for clipping
+    % ADC maximum positive integer code.
+    adcMaxCode = 2^(adcNumBits-1) - 1; % maximum representable number of 
+    % ADC, in order to be symmetric to 0 --> -511,..,0,...,+511 (total 1023
+    % not 1024).
+    % Quantization step. distance between two consecutive quantized levels
+    adcStep = adcFullScale / adcMaxCode;    
+    % Separate I and Q components.
+    rxADCReal = real(rxSlotBaseband);
+    rxADCImag = imag(rxSlotBaseband);    
+    % Input clipping. [-1;+1], very clever with only one row of code
+    rxADCReal = min(max(rxADCReal,-adcFullScale),adcFullScale);
+    rxADCImag = min(max(rxADCImag,-adcFullScale),adcFullScale);    
+    % Uniform quantization. Uniform since the quantization step is equal.
+    rxADCReal = adcStep * round(rxADCReal/adcStep);
+    rxADCImag = adcStep * round(rxADCImag/adcStep);    
+    % Complex ADC output.
+    rxSlotBasebandADC = rxADCReal + 1j*rxADCImag;    
 
     % 3. RCC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
-    rxSlotMatched = rxRRCsync(rxSlotBaseband);
+    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
 
     % 4. CORRELATION METRIC CALCULUS
     % For each possible sample q, we take:
@@ -476,7 +567,57 @@ for k = 1:numBursts
     end
 
     rxBurstSymbols = ...
-        rxSlotMatched(burstSampleIndices);
+    rxSlotMatched(burstSampleIndices);
+
+    % 8.1. SIMPLE FINE AGC 
+    % AGC Fine is required in order to finalize the coarse AGC, over the
+    % precise found synchronization symbols.
+    % Fine AGC must be implemented once we have understood which samples
+    % belong to the burst, the timing must be known.
+    % The symbols known by the receiver are the ones generated by:
+    % - 48 synchronization reference bits;
+    % - 48 phase reference bits.
+    % Hence in total we have:
+    % 48 + 48 = 96 knwon bit.
+    % With 8-PSK each symbol contain 3 bits:
+    % 96 / 3 = 32 known symbols.
+    numFinePilotSymbols = floor( ...
+        (length(syncReference) + length(phaseReference)) ...
+        / bitsPerSymbol);    
+    % The transmitted pilots are the first symbols of the burst after the 
+    % CP. Since Sync and Phase reference are equal fot all bursts,
+    % We can extract them from the first column of: modulatedBursts.
+    knownFinePilotSymbols = ...
+        modulatedBursts(1:numFinePilotSymbols,1);    
+    % rxBurstSymbols contains at the beginning the cyclic prefix.
+    % So the first pilot symbol is in position:
+    % cpLength + 1
+    finePilotStart = cpLength + 1;    
+    % And the last pilot symbol known.
+    finePilotEnd = ...
+        finePilotStart + numFinePilotSymbols - 1;    
+    % Extract the pilots received.
+    receivedFinePilotSymbols = ...
+        rxBurstSymbols(finePilotStart:finePilotEnd);    
+    % Average power of the received pilots.
+    measuredFinePilotPower = mean( ...
+        abs(receivedFinePilotSymbols).^2);  
+    % Average power of the transmitted pilots.
+    % for a normal 8-PSK modulation, should be around 1.
+    % In any case it is better to directly calculate it.
+    targetFinePilotPower = mean( ...
+        abs(knownFinePilotSymbols).^2);
+    % Calculate the fine gain.
+    fineGain = sqrt( ...
+        targetFinePilotPower / ...
+        max(measuredFinePilotPower,1e-12));
+    % Limitiamo la correzione.
+    fineGain = min( ...
+        max(fineGain,fineMinGain), ...
+        fineMaxGain);
+    % apply the same gain to the whole burst.
+    rxBurstSymbols = fineGain * rxBurstSymbols;
+    % Save the burst after Coarse and Fine AGC.
     rxSCFDEBursts(:,k) = rxBurstSymbols;
 end
 
@@ -626,43 +767,3 @@ decodedPacket = turboDec(rxSoft);
 % Just to compare
 %{%}
 numFinalErrors = sum(packet ~= decodedPacket)
-
-
-
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                             USEFUL FUNCTIONS                            %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-function metric = normalizedPreambleCorrelation(rx, preamble)
-%NORMALIZEDPREAMBLECORRELATION
-% Computes a sliding normalized correlation between rx and a known
-% preamble waveform.
-%
-% metric(i) corresponds to the hypothesis that the preamble starts
-% at sample i of rx.
-    rx = rx(:);
-    preamble = preamble(:);
-    preambleLength = length(preamble);
-    if length(rx) < preambleLength
-        metric = zeros(0,1);
-        return;
-    end
-    % Matched-filter numerator:
-    % sum rx(i+n) * conj(preamble(n))
-    numerator = conv(rx, flipud(conj(preamble)), 'valid');
-    % Energy of each received sliding window.
-    windowEnergy = conv( ...
-        abs(rx).^2, ...
-        ones(preambleLength,1), ...
-        'valid');
-    preambleEnergy = sum(abs(preamble).^2);
-    denominator = sqrt(windowEnergy * preambleEnergy);
-    % Avoid division by zero in empty/noise-free regions.
-    metric = abs(numerator) ./ max(denominator, eps);
-end
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                           END USEFUL FUNCTIONS                          %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
