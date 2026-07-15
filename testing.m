@@ -130,6 +130,8 @@ end
 % parameters
 numFrequencyChannels = 4;
 symbolRate = 13e6; % 13MHz
+% NOTE! TODO! symbolRate has been hardcoded even though should derive from 
+% math formulas as: symbolRate = channelBandwidth/(1+rolloff)
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
 dutyCycle = 0.25; 
 fMin = 1435e6;
@@ -137,6 +139,7 @@ fMax = 1518e6;
 % timing
 burstTxTime = symbolsPerBurstWithCP / symbolRate;     % seconds
 slotDuration = burstTxTime / dutyCycle;               % seconds
+% fundamental check of the logic: burstTxTime / slotDuration = dutyCycle
 totalPacketTime = numBursts * slotDuration;           % seconds
 % Frequency channels
 channelBandwidth = (fMax - fMin) / numFrequencyChannels;
@@ -187,20 +190,6 @@ hoppingTable = table( ...
 disp(hoppingTable);
 %}
 
-% TODO! do we really need the following structure?
-%{
-% Build transmission structure
-for k = 1:numBursts
-    transmission(k).burstID = k; %#ok<SAGROW>
-    transmission(k).timeSlot = timeSlots(k); %#ok<SAGROW>
-    transmission(k).startTime_s = startTimes(k); %#ok<SAGROW>
-    transmission(k).endTime_s = endTimes(k); %#ok<SAGROW>
-    transmission(k).frequencyChannel = frequencyChannels(k); %#ok<SAGROW>
-    transmission(k).carrierFrequency_Hz = carrierForBurst(k); %#ok<SAGROW>
-    transmission(k).signal = txSCFDEBursts(:,k); %#ok<SAGROW>
-end
-%}
-
 %% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
 % baseband, we must use: samplesPerSymbol > 2*(fmax_occupied)/symbolRate
@@ -208,6 +197,7 @@ end
 % (relativeCarrierFrequencies(4) - relativeCarrierFrequencies(3))]
 % Atually, with RRC the one-sided band of a single channel is: 
 % Bsingle = symbolRate/2 * (1 + rolloff) --> hence fmax_occupied is less.
+% TODO! in any case adjust the samplesPerSymbol accordingly.
 % NOTE! see: https://en.wikipedia.org/wiki/Raised-cosine_filter for time
 % and frequency domain plots, for a better understanding of RRC. RRC makes
 % symbols extremely overlap over the time, but thanks to the first Nyquist
@@ -221,10 +211,10 @@ Fs = symbolRate * samplesPerSymbol; % sampling frequency, since we are
 % we need more samples to represent one symbol.
 % Configuration of Root Raised Cosine TX Filter
 rolloff = 0.35; % how much extra band we use
-% NOTICE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
+% NOTE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
 % IF we transmit simultaneously multiple bursts per time slot we could
 % experience ACI, since our channel spacing is roughly 13.83 MHz --> set
-% rolloff accordingly
+% rolloff accordingly <-- TODO!
 % filterSpan = 12; filter duration in symbols, NOTE! the longer it lasts
 % over time, the sharper it is over the frequencies. I have commented it
 % since it has been already defined above for the TF-Hopping, so that a
@@ -288,9 +278,9 @@ end
 
 % example of simple multipath channel, column vector, three taps,
 % IT WORKS ON THE SAMPLES, NOT ON THE SYMBOLS, the channel sees samples
-h = [0.9;       % LOS
-     0.4+0.2j;  % echo 1
-     0.2-0.1j]; % echo 2
+h = [1];       % LOS
+     % 0.4+0.2j;  % echo 1
+     % 0.2-0.1j]; % echo 2
 
 % Apply channel response as a convolution without retroaction as a FIR 
 % between the Tx signal and the channel.
@@ -381,7 +371,39 @@ coarseMaxGain = 30;
 fineMinGain = 0.5;
 fineMaxGain = 2;
 
-% NOTE! this is the main external cycle that iterates over all the bursts
+%% CARRIER PHASE AND FREQUENCY SYNCHRONIZATION CONFIGURATION
+% We use both:
+%   - synchronization-reference symbols;
+%   - phase-reference symbols.
+% These are all known by the receiver.
+numCarrierPilotBits = length(syncReference) + length(phaseReference);
+% Safety check:
+% the number of known bits must contain an integer number of 8-PSK symbols.
+assert( ...
+    mod(numCarrierPilotBits, bitsPerSymbol) == 0, ...
+    ['The number of known carrier-pilot bits must be ' ...
+     'divisible by bitsPerSymbol.']);
+numCarrierPilotSymbols = numCarrierPilotBits / bitsPerSymbol;
+% Known transmitted symbols.
+% They are the first symbols after the CP and are identical in every burst.
+knownCarrierPilotSymbols = modulatedBursts(1:numCarrierPilotSymbols, 1);
+% Positions of the known carrier-pilot symbols inside rxBurstSymbols.
+% rxBurstSymbols has the structure:
+% CP | sync | phase reference | index | payload
+carrierPilotIndicesInBurst = cpLength + (1:numCarrierPilotSymbols);
+%% TRUE IMPAIRMENTS USED TO TEST THE RECEIVER
+% These quantities are known only by the simulator.
+% The estimator below must not use them for its calculations.
+trueCarrierPhaseOffset_rad = deg2rad(30) * ones(numBursts, 1);
+trueCarrierFrequencyOffset_Hz = 14e3 * ones(numBursts, 1);
+%% STORAGE FOR THE ESTIMATES
+estimatedCarrierPhaseOffset_rad = nan(numBursts, 1);
+estimatedCarrierFrequencyOffset_Hz = nan(numBursts, 1);
+carrierPhaseEstimationError_rad = nan(numBursts, 1);
+carrierFrequencyEstimationError_Hz = nan(numBursts, 1);
+
+% NOTE! this is the main external cycle that iterates over all the bursts, 
+% and it's divided into 8 distinct sections, with some sub-sections as well
 for k = 1:numBursts
     reset(rxRRCsync); % clean the filter
 
@@ -426,7 +448,7 @@ for k = 1:numBursts
     % the 75th percentile divides the samples as follow:
     % - the 75% has power lower than the threshold;
     % - the 25% has power higher than the threshold.
-    % NOTE! adjust the percentile based on the Duty Cycle set.
+    % NOTE! TODO! adjust the percentile based on the Duty Cycle set.
     powerThreshold = prctile(slotSamplePower,75);
     % Select the samples probaly belonging to the burst.
     activeSamples = slotSamplePower >= powerThreshold; % array of: 1/0
@@ -625,13 +647,102 @@ for k = 1:numBursts
     rxSCFDEBursts(:,k) = rxBurstSymbols;
 end
 
+%% 8.2. SIMULATED CARRIER PHASE AND FREQUENCY IMPAIRMENTS
+% This first implementation introduces the residual carrier impairments
+% at symbol rate after timing acquisition and matched filtering.
+% It is a simple link-level equivalent model. It allows us to develop and
+% validate the phase/frequency estimator independently.
+% Symbol indices relative to the first useful symbol after the CP.
+% CP symbols have negative indices:
+%   -cpLength, ..., -2, -1
+% The first synchronization symbol has index 0.
+% The final payload symbol has index symbolsPerBurst-1.
+burstRelativeSymbolIndex = (-cpLength : symbolsPerBurst-1).';
+% Check that the index vector has the same length as the extracted burst.
+assert( ...
+    length(burstRelativeSymbolIndex) == length(rxBurstSymbols), ...
+    'Carrier synchronization index length does not match burst length.');
+% True phase evolution applied to burst k.
+% phase(m) = initial phase + 2*pi*CFO*m/symbolRate
+trueCarrierPhaseEvolution = ...
+    trueCarrierPhaseOffset_rad(k) ...
+    + 2*pi ...
+    * trueCarrierFrequencyOffset_Hz(k) ...
+    * burstRelativeSymbolIndex ...
+    / symbolRate;
+% Apply the artificial carrier impairment.
+rxBurstSymbolsImpaired = ...
+    rxBurstSymbols .* ...
+    exp(1j*trueCarrierPhaseEvolution);
+
+%% 8.3. EXTRACT THE KNOWN CARRIER PILOTS
+receivedCarrierPilotSymbols = ...
+    rxBurstSymbolsImpaired( ...
+        carrierPilotIndicesInBurst);
+
+%% 8.4. REMOVE THE KNOWN PILOT MODULATION
+% If:
+% receivedPilot(m) ≈ knownPilot(m) * exp(j*phase(m))
+% then:
+% receivedPilot(m) * conj(knownPilot(m)) ≈ exp(j*phase(m))
+% because 8-PSK symbols have unit magnitude.
+carrierPilotProducts = ...
+    receivedCarrierPilotSymbols .* ...
+    conj(knownCarrierPilotSymbols);
+
+%% 8.5. MEASURE AND UNWRAP THE PILOT PHASE
+wrappedPilotPhase = angle(carrierPilotProducts);
+% angle() returns values between -pi and +pi.
+% unwrap() removes artificial jumps of approximately 2*pi, converting
+% the phase evolution into an approximately continuous line.
+unwrappedPilotPhase = unwrap(wrappedPilotPhase);
+
+%% 8.6. ESTIMATE PHASE INTERCEPT AND PHASE SLOPE
+% The first known pilot has relative symbol index zero.
+carrierPilotRelativeIndex = ...
+    (0:numCarrierPilotSymbols-1).';
+% Linear least-squares fit:
+% phase(m) ≈ slope*m + intercept
+% p(1) = slope in radians per symbol
+% p(2) = intercept in radians
+phaseFit = polyfit( carrierPilotRelativeIndex, unwrappedPilotPhase, 1);
+estimatedPhaseSlope_radPerSymbol = phaseFit(1);
+estimatedPhaseIntercept_rad = phaseFit(2);
+
+%% 8.7. CONVERT PHASE SLOPE TO FREQUENCY OFFSET
+estimatedCarrierFrequencyOffset_Hz(k) = estimatedPhaseSlope_radPerSymbol ...
+    * symbolRate / (2*pi);
+% Wrap the initial phase estimate to the interval [-pi, +pi].
+estimatedCarrierPhaseOffset_rad(k) = ...
+    angle(exp(1j*estimatedPhaseIntercept_rad));
+
+%% 8.8. CORRECT THE ENTIRE BURST
+estimatedCarrierPhaseEvolution = ...
+    estimatedCarrierPhaseOffset_rad(k) ...
+    + 2*pi ...
+    * estimatedCarrierFrequencyOffset_Hz(k) ...
+    * burstRelativeSymbolIndex ...
+    / symbolRate;
+rxBurstSymbolsCarrierCorrected = ...
+    rxBurstSymbolsImpaired .* ...
+    exp(-1j*estimatedCarrierPhaseEvolution);
+
+% Save the burst after:
+%   - coarse AGC;
+%   - ADC;
+%   - timing synchronization;
+%   - fine AGC;
+%   - carrier phase synchronization;
+%   - carrier frequency synchronization.
+rxSCFDEBursts(:,k) = rxBurstSymbolsCarrierCorrected;
+
 %testing
-%{
+%{%}
 errMax = max(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)));
 errRMS = sqrt(mean(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)).^2));
 fprintf('Max error: %.3e\n', errMax);
 fprintf('RMS error: %.3e\n', errRMS);
-%}
+
 
 
 %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
@@ -645,9 +756,8 @@ knownPilotSymbols = modulatedBursts(1:numPilotSymbols, 1);
 numPilotSymbols = length(knownPilotSymbols);
 
 % NOTE! the pilot tones (symbols) must be >> number of taps (Lest). 
-% Currenlty the way it is does not really satisfy this. there are two 
-% possible ways to operate:
-% 1. Use dedicated Pilot Bursts as used in the current LinkLevelPHY.m file
+% there are two possible ways to operate:
+% 1. Use dedicated Pilot Bursts;
 % 2. Augment the length of the sync and reference bits, at least covering a
 % total of 16-32 symbols.
 % by doing so you will notice a strong decrease in numErrors8PSK even with
@@ -700,6 +810,7 @@ for k = 1:numBursts % cycle over all bursts
     H_est_bursts(:,k) = H_hat; % saves the frequency response estimates by 
     % burst k
     % SC-FDE Equalization
+    % TODO! implement MMSE
     Y = fft(rxBurst, N);
     % ZF with protection against very small H
     epsFloor = 1e-6;
