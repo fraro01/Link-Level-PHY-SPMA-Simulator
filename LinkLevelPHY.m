@@ -392,7 +392,7 @@ for k = 1:numBursts
     tSlot = globalSampleIndices / Fs; % Fs = [samples/second], do the math
     fRel = relativeCarrierFrequencies(frequencyChannels(k)); % FH scheme
     % Downconversion bring the entire time slot back to baseband
-    % raw because we still have to appli Coarse AGC
+    % raw because we still have to apply Coarse AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
 
     % 2.1. SIMPLE COARSE AGC
@@ -617,12 +617,12 @@ for k = 1:numBursts
 end
 
 %testing
-%{
+%{%}
 errMax = max(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)));
 errRMS = sqrt(mean(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)).^2));
 fprintf('Max error: %.3e\n', errMax);
 fprintf('RMS error: %.3e\n', errRMS);
-%}
+
 
 
 %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
