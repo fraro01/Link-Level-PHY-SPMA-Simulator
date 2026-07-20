@@ -107,7 +107,7 @@ end
 
 
 %% SC-FDE Modulation, Cyclic Prefix 
-cpLength = 16; % TODO! this must be set acccording to the channel length
+cpLength = 16; % TODO! Must exceed the maximum channel delay in symbols
 % adding the space for the cyclic prefix
 txSCFDEBursts = zeros(symbolsPerBurst + cpLength, numBursts);
 for k = 1:numBursts
@@ -273,56 +273,220 @@ end
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                           SIMPLE CHANNEL                                %
+%                           AVIONIC CHANNEL                               %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% example of simple multipath channel, column vector, three taps,
-% IT WORKS ON THE SAMPLES, NOT ON THE SYMBOLS, the channel sees samples
-h = [0.9;       % LOS
-     0.4 + 0.2j;  % echo 1
-     0.2 - 0.1j]; % echo 2
+% Pipeline:
+% txSignal
+%    -> TX power normalization
+%    -> FSPL and link budget
+%    -> Rician multipath fading
+%    -> Doppler
+%    -> oscillator CFO and phase offset
+%    -> thermal AWGN
+%    -> RX front-end gain
+% External interference is not included yet.
 
-% Apply channel response as a convolution without retroaction as a FIR 
-% between the Tx signal and the channel.
-rxSignalNoiseless = filter(h, 1, txSignal);
 
-% Carrier Frequency Offset (CFO) and Phase Impairments
+%% 1. Avionic scenario parameters
+% ASSUMPTION!
+% Distance and velocities remain approximately constant during one packet.
+% we could implement a sort of time variance
+linkDistance_m = 50e3;          % TX-RX distance: 50 km
+aircraftSpeed_mps = 343;        % aircraft relative speed magnitude [m/s]
+% radialVelocity_mps = aircraftSpeed_mps * cos(∠(TX-RX))
+radialVelocity_mps = aircraftSpeed_mps * cosd(10); % velocity component 
+% along the LOS [m/s]
+% Convention used here:
+% radialVelocity_mps > 0  --> approaching
+% radialVelocity_mps < 0  --> moving away
+
+%% 2. Link-budget parameters
+% Transmitter power
+txPower_dBm = 43; % 40 dBm = 10 W; dBm (Decibels relative to 1 milliwatt)
+% Antenna gains
+txAntennaGain_dBi = 6; % dBi (Decibels relative to Isotropic)
+rxAntennaGain_dBi = 6; % RX antenna gain [dBi]
+% Feeder, cable and connector losses
+txFeederLoss_dB = 0.5;  % TX cable/connector loss [dB]
+rxFeederLoss_dB = 0.5;  % RX cable/connector loss [dB]
+% Additional propagation and implementation losses
+otherPropagationLosses_dB = 1; % polarization, implementation, etc. [dB]
+% Receiver noise and front-end parameters
+receiverNoiseFigure_dB = 2; % noise added by the receiver
+noiseTemperature_K = 290; % reference temperature [K]
+% Analog gain before the normalized ADC model
+rxFrontEndGain_dB = 80; % bring the signal in the order of [-80;-100] dBm, 
+% to make it compliant to our RX ADC, hence: LNA/IF gain before ADC [dB]
+
+%% 3. Physical constants
+speedOfLight_mps = physconst('LightSpeed'); % for the wavelength
+boltzmann_JperK = physconst('Boltzmann'); % for the thermal noisePower 
+
+%% 4. Normalize the transmitted waveform to the selected TX power
+% txSignal currently has arbitrary normalized units.
+% Select only samples containing an active transmitted waveform.
+txActiveSamples = abs(txSignal) > 1e-12;
+if ~any(txActiveSamples)
+    error('The transmitted waveform contains no active samples.');
+end
+% Average power of the current normalized MATLAB waveform.
+txSignalPowerArbitrary = mean(abs(txSignal(txActiveSamples)).^2);
+% Convert transmitter power from dBm to watts. 
+txPower_W = 10^((txPower_dBm - 30)/10); % standard formula
+% After this scaling, |txSignalPhysical|^2 is interpreted as instantaneous
+% power in watts, and its active-sample average is txPower_W.
+txSignalPhysical = txSignal .* sqrt(txPower_W / txSignalPowerArbitrary);
+% square root is necessary since we are modifying the amplitude
+
+%% 5. Free Space Path Loss and link budget
+% Sample-wise propagation attenuation.
+largeScaleAmplitude = zeros(size(txSignalPhysical));
+% Diagnostic arrays, one value for each burst.
+fsplPerBurst_dB = zeros(numBursts,1);
+% different bursts are on different carriers leading to different FSPL
+for k = 1:numBursts
+    % Actual RF carrier used by burst k.
+    carrierHz = carrierForBurst(k);
+    % Wavelength corresponding to the current carrier.
+    wavelength_m = speedOfLight_mps / carrierHz;
+    % Free Space Path Loss in dB.
+    fsplPerBurst_dB(k) = fspl(linkDistance_m, wavelength_m);
+    % Propagation gain excluding txPower_dBm.
+    % txPower_dBm is excluded because txSignalPhysical has already
+    % been normalized to the actual transmitter power.
+    propagationGain_dB = ...
+        txAntennaGain_dBi ...
+        + rxAntennaGain_dBi ...
+        - txFeederLoss_dB ...
+        - rxFeederLoss_dB ...
+        - otherPropagationLosses_dB ...
+        - fsplPerBurst_dB(k);
+    % Convert power gain in dB into an amplitude multiplier.
+    propagationAmplitudeGain = 10^(propagationGain_dB/20);
+    % First sample occupied by the pulse-shaped burst.
+    burstStartSample = round(startTimes(k)*Fs) + 1;
+    % Include useful waveform and RRC filter tail.
+    burstLengthSamples = ...
+        (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
+    burstEndSample = min( ...
+        burstStartSample + burstLengthSamples - 1, ...
+        length(txSignalPhysical));
+    % Assign the attenuation to samples belonging to this burst.
+    largeScaleAmplitude( burstStartSample:burstEndSample) = ...
+        propagationAmplitudeGain;
+end
+% Apply large-scale gains and losses.
+txSignalAfterLinkBudget = txSignalPhysical .* largeScaleAmplitude;
+
+%% 6. Multipath parameters
+% PathDelays values are expressed in seconds.
+% Here:
+%   path 1 -> LOS, zero delay
+%   path 2 -> reflection delayed by one symbol
+%   path 3 -> reflection delayed by two symbols
+% delays are taken relative from the symbol rate and samples per symbol and
+% more importantly: are strictly related to the "Lest" parameter.
+% TODO! in case of tweakings, set "Lest" parameter accordingly
+pathDelays_s = [0, ...
+                1/symbolRate, ...
+                2/symbolRate];
+% Average relative power of the paths relative to the strongest path, 
+% LOS/echo paths [dB]
+averagePathGains_dB = [0, ...
+                       -12, ...
+                       -18];
+% First path is Rician with K>0 (component specular/LOS is dominant), other
+% paths are Rayleigh (because KFactor is supplied as a vector), with a 
+% diffuse component without LOS. 
+% here we've set "KFactor" as a linear ratio, not in dB
+ricianKFactor = [30, ...
+                 0, ...
+                 0];
+
+%% 7. Doppler parameters
+% Representative carrier frequency for the complete hopping band.
+referenceCarrier_Hz = fCenter;
+% Corresponding wavelength.
+referenceWavelength_m = speedOfLight_mps / referenceCarrier_Hz;
+% Maximum Doppler magnitude of diffuse multipath. Used to generate the
+% doppler Spread Sprectrum
+maximumDopplerShift_Hz = aircraftSpeed_mps / referenceWavelength_m;
+% Signed Doppler shift of the direct LOS component. remember:
+% radialVelocity_mps = aircraftSpeed_mps * cos(∠(TX-RX))
+directPathDopplerShift_Hz = radialVelocity_mps / referenceWavelength_m;
+
+%% 8. Rician multipath fading channel
+ricianChannel = comm.RicianChannel( ...
+            'SampleRate', Fs, ...
+            'PathDelays', pathDelays_s, ...
+            'AveragePathGains', averagePathGains_dB, ...
+            'NormalizePathGains', true, ... % total average power of the paths is 1, hence 0 dB
+            'KFactor', ricianKFactor, ... / ratio between power of LOS component / power casual of diffuse component
+            'DirectPathDopplerShift', [directPathDopplerShift_Hz 0 0], ...
+            'DirectPathInitialPhase', [0 0 0], ... % initial phase of LOS component of each Rician path
+            'MaximumDopplerShift', maximumDopplerShift_Hz, ...
+            'PathGainsOutputPort', true, ... % diagnostic
+            'RandomStream', 'Global stream');
+% Apply time-varying multipath channel.
+[rxSignalFaded, pathGains] = ricianChannel(txSignalAfterLinkBudget);
+% rxSignalFaded includes:
+% - LOS component;
+% - echoes;
+% - delays of multipath;
+% - temporal variation of fading;
+% - Doppler LOS;
+% - Doppler spectrum of the diffused components.
+% "pathGains" includes the complex instaneous coefficients of the paths
+
+%% 9. Oscillator CFO and phase offset
+% Hardware-related oscillator Carrier Frequency Offset (CFO) and Phase 
+% Impairments.
 % TODO! set the following Offset parameters according to the simulation
-trueCarrierPhaseOffset_rad = deg2rad(30); % the Phase offset introduced
-trueCarrierFrequencyOffset_Hz = 14e3; % the CFO introduced
-sampleIndex = (0:length(rxSignalNoiseless)-1).'; % we start from 0 --> -1
+% These are distinct from physical propagation Doppler.
+trueCarrierPhaseOffset_rad = deg2rad(15); % the Phase offset introduced
+trueCarrierFrequencyOffset_Hz = 1e3; % the CFO introduced in Hz
+sampleIndex = (0:length(rxSignalFaded)-1).'; % we start from 0 --> -1
 timeAxis = sampleIndex / Fs; % in seconds
 % formula used below: ϕ(t) = ϕ0 + 2πΔft
 carrierImpairmentPhase = ...
     trueCarrierPhaseOffset_rad ...
-    + 2*pi*trueCarrierFrequencyOffset_Hz*timeAxis;
+    + 2*pi * trueCarrierFrequencyOffset_Hz * timeAxis;
 % Impair the signal with the parameters defined above
-rxSignalImpaired = rxSignalNoiseless .* exp(1j*carrierImpairmentPhase);
+rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 
-% AWGN
-SNRdB = 100; % signal to noise ratio in dB (P_signal/P_noise), but power 
-% calculus are usually performed linearly...
-SNRlin = 10^(SNRdB/10); % converts the above SNR from dB to linear value 
-% "the signal is SNRlin times greater than the noise."
-
-% Measure actual signal power only after channel effects
-% Noise variance necessary to obtain the desired SNR set above
-active = abs(rxSignalImpaired) > 1e-12; % it stores 1 and 0 (True/False)
-signalPower = mean(abs(rxSignalImpaired(active)).^2); % calculates signal 
-% power
-% only for non-zeros symbols, thanks to threshopld set above (1e-12)
-noiseVar = signalPower / SNRlin; % NOTE! the noiseVar, based on the above 
-% formulas is the P_noise, For zero-mean noise, average power equals 
-% variance.
-noise = sqrt(noiseVar/2) * ... % complex noise, divided by 2, because the variance gets divided between Re and Im
-    (randn(size(rxSignalImpaired)) + 1j*randn(size(rxSignalImpaired))); 
+%% 10. Thermal AWGN and receiver noise figure
+% the SNR as a consequence of: transmitted power, distance, antennas gains,
+% losses, bandwidth, temperature, noise figure.
+% Convert receiver noise figure from dB to linear noise factor.
+receiverNoiseFactor = 10^(receiverNoiseFigure_dB/10);
+% Receiver-input noise power, standard formula:
+% Pn = k * T * B * F
+noisePSD_WperHz = ...
+    boltzmann_JperK ...
+    * noiseTemperature_K ...
+    * receiverNoiseFactor;
+noiseVariancePerSample_W = noisePSD_WperHz * Fs;
+% Circular complex Gaussian noise.
+% Half the variance is assigned to the real component,
+% and half to the imaginary component.
+thermalNoise = ... % complex noise, divided by 2, because the variance gets divided between Re and Im
+    sqrt(noiseVariancePerSample_W/2) .* ( randn(size(rxSignalImpaired)) ...
+        + 1j*randn(size(rxSignalImpaired)));
 % complex noise, randn generates gaussian noise with mean 0 and variance 1
 
-rxSignal = rxSignalImpaired + noise; % add noise to the attenuated received 
-% signal
+% Signal plus receiver-input noise.
+rxSignalAtAntenna = rxSignalImpaired + thermalNoise;
+
+%% 11. Receiver analog front-end gain
+% Convert gain in dB into an amplitude multiplier.
+% so this block performs: LNA, mixer, IF amplifier, baseband amplifier
+rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
+% Apply the same gain to signal AND noise.
+rxSignal = rxFrontEndAmplitudeGain * rxSignalAtAntenna;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                        END SIMPLE CHANNEL                               %
+%                        END AVIONIC CHANNEL                              %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
