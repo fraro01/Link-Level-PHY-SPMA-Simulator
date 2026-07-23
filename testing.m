@@ -279,13 +279,12 @@ end
 % Channel pipeline:
 % txSignal
 %    -> TX power normalization
-%    -> FSPL and link budget
+%    -> FSPL and Link Budget
 %    -> Doppler
 %    -> Rician multipath fading
-%    -> oscillator CFO and phase offset
+%    -> oscillator CFO and Phase Offset
 %    -> thermal AWGN
 %    -> RX front-end gain
-% External interference is not included yet.
 
 % The complex-baseband samples are interpreted as voltage amplitudes
 % across a 1-ohm reference load.
@@ -300,19 +299,15 @@ end
 % ASSUMPTION!
 % Distance and velocities remain approximately constant during one packet.
 % we could implement a sort of time variance for future implementations.
-linkDistance_m = 50e3;          % TX-RX distance: 50 km
+linkDistance_m = 50e3;          % TX-RX distance
 aircraftSpeed_mps = 686;        % aircraft relative speed magnitude [m/s]
-% radialVelocity_mps = aircraftSpeed_mps * cos(∠(TX-RX)) 
-% cosd(x) expects angle "x" expressed in degrees
-radialVelocity_mps = aircraftSpeed_mps * cosd(10); % velocity component 
-% along the LOS [m/s]
 % Convention used here:
 % radialVelocity_mps > 0  --> approaching
 % radialVelocity_mps < 0  --> moving away
 
 %% 2. Link-budget parameters
 % Transmitter power
-txPower_dBm = 43; % [dBm]                formula: x dBm = 10^(x/10) mW; 
+txPower_dBm = 48; % [dBm]                formula: x dBm = 10^(x/10) mW; 
 % dBm (Decibels RELATIVE to 1 milliwatt)
 % Antenna gains
 txAntennaGain_dBi = 6; % [dBi] (Decibels RELATIVE to Isotropic antenna)
@@ -323,12 +318,13 @@ rxFeederLoss_dB = 0.5;  % RX cable/connector loss [dB]
 % Additional propagation and implementation losses
 otherPropagationLosses_dB = 1; % polarization, implementation, etc. [dB]
 % Receiver noise and front-end parameters:
-receiverNoiseFigure_dB = 2; % added by the receiver device, degrading SNR
+receiverNoiseFigure_dB = 2; % added by the receiver device, degrading SNR.
 % Analog gain before the normalized ADC model. LNA/IF gain before ADC [dB]
-rxFrontEndGain_dB = 80; % The received signal at the antenna is 
+rxFrontEndGain_dB = 90; % The received signal at the antenna is 
 % approximately between -100 dBm and -80 dBm. Apply 80 dB of analog 
 % front-end gain to bring it approximately between -20 dBm and 0 dBm before 
 % the ADC. to make it compliant to our RX ADC.
+% check it with: 10*log10(mean(abs(rxSignalAtAntenna).^2)) for properly set
 
 %% 3. Normalize the transmitted waveform to the selected TX power
 % txSignal currently has arbitrary normalized MATLAB units.
@@ -350,7 +346,7 @@ txSignalPhysical = txSignal .* sqrt(txPower_W / txSignalPowerArbitrary);
 speedOfLight_mps = physconst('LightSpeed'); % for the wavelength calculus
 % Sample-wise propagation attenuation.
 largeScaleAmplitude = zeros(size(txSignalPhysical));
-% Diagnostic arrays, one value for each burst.
+% one value for each burst.
 fsplPerBurst_dB = zeros(numBursts,1);
 % different bursts are on different carriers leading to different FSPL
 for k = 1:numBursts %iterate over all the N bursts
@@ -389,7 +385,12 @@ end
 txSignalAfterLinkBudget = txSignalPhysical .* largeScaleAmplitude;
 
 %% 5. Multipath parameters
-% PathDelays values are expressed in seconds.
+% for a Rice model:
+%   - If K = 0, the dominant path disappears, and the Rician model reduces 
+%     perfectly to a Rayleigh model.
+%   - As K → ∞, the signal resembles an uncorrupted, stable signal with 
+%     almost zero fading.
+% PathDelays values are expressed in seconds, using symbolRate.
 % Here:
 %   path 1 -> LOS, zero delay ASSUMPTION!
 % The absolute propagation delay is neglected in the proposed channel 
@@ -397,9 +398,9 @@ txSignalAfterLinkBudget = txSignalPhysical .* largeScaleAmplitude;
 % the receiver is assumed to be synchronized to the first arriving path. 
 % Consequently, only the excess delays between the multipath components are 
 % modeled, since they determine the channel impulse response and directly 
-% affect equalization and detection performance.
-%   path 2 -> reflection delayed by one symbol
-%   path 3 -> reflection delayed by two symbols
+% affect equalization and detection performance (relative delays).
+%   path 2 -> reflection delayed by N symbol;
+%   path 3 -> reflection delayed by N+X symbols.
 % delays are taken relative from the symbol rate and samples per symbol and
 % more importantly: are strictly related to the "Lest" parameter.
 % TODO! in case of tweakings, set "Lest" parameter accordingly
@@ -414,7 +415,9 @@ averagePathGains_dB = [0, ... % 0 gain with respect to reference (itself is take
 % First path is Rician with K>0 (component specular/LOS is dominant), other
 % paths are Rayleigh (because KFactor is supplied as a vector), with a 
 % diffuse component without LOS. 
-% here we've set "KFactor" as a linear ratio, not in dB
+% here we've set "KFactor" as a linear ratio, not in dB, e.g.: linear_K=X
+% --> the deterministic component is X times stronger (power) than the 
+% diffuse casual component.
 % the K-factor Rician determines the ratio between: power of the
 % deterministic component (LOS) and the diffuse casual component. Since a
 % Rician channel contains a deterministic component and a diffuse casual
@@ -423,35 +426,34 @@ ricianKFactor = [30, ...
                  0, ... % the deterministic compoment LOS power is 0 --> Rayleigh channel
                  0]; % the deterministic compoment LOS power is 0 --> Rayleigh channel
 % because a Rician channel with K --> 0 approaches a Rayleigh channel
-% NOTE! actually the others two minor taps are reflected by the seas and
+% NOTE! actually the others two minor taps are reflected by the sea and
 % probably by the wing of the aircraft --> we could model them with a
 % predominant deterministic component with respect to the diffuse component
 % as well! --> Rice insetad of Rayleigh (K>0).
 % Notice that the doppler shift is usually applied only for the Rice,
 % because the Rayleigh is constituted only by many diffuse components by
 % which attributing a single neat frequency shift is too difficult, hence
-% in this case the doppler is only accouynted as doppler spread spectrum.
+% in this case the doppler is only accounted as doppler spread spectrum.
 
 %% 6. Doppler parameters
 % Corresponding wavelength.
 minimumWavelength_m = speedOfLight_mps / fMax;
 centralWavelength_m = speedOfLight_mps / fCenter;
-% Conservative maximum Doppler magnitude used to parameterize the
+% Conservative maximum Doppler magnitude used to parametrize the
 % diffuse fading process of all channel paths, for doppler spread spectrum
 maximumDopplerShift_Hz = aircraftSpeed_mps / minimumWavelength_m;
-% Signed Doppler shift of the direct LOS component. remember:
-% radialVelocity_mps = aircraftSpeed_mps * cos(∠(TX-RX))
-directPathDopplerShift_Hz = radialVelocity_mps / centralWavelength_m;
+% Signed Doppler shift of the direct LOS component
+directPathDopplerShift_Hz = aircraftSpeed_mps / centralWavelength_m;
 
 %% 7. Rician multipath fading channel
 ricianChannel = comm.RicianChannel( ...
     'SampleRate', Fs, ... % how many samples per second the channel contains
-    'PathDelays', pathDelays_s, ...
+    'PathDelays', pathDelays_s, ... % seconds
     'AveragePathGains', averagePathGains_dB, ... % average power of each path
     'NormalizePathGains', true, ... % normalize the total average power of all the paths of the multipath to 1 (otherwise is greater), see below
-    'KFactor', ricianKFactor, ...  ratio between power of LOS component / power casual of diffuse component
-    'DirectPathDopplerShift', [directPathDopplerShift_Hz 0 0], ... % doppler of the LOS component, only for Rician paths
-    'DirectPathInitialPhase', [0 0 0], ... % initial phase of LOS component of each Rician path; they depend on the distance TX-RX
+    'KFactor', ricianKFactor, ... % ratio between power of LOS component / power casual of diffuse component
+    'DirectPathDopplerShift', [directPathDopplerShift_Hz*cosd(10) directPathDopplerShift_Hz*cosd(45) directPathDopplerShift_Hz*cosd(5)], ... % doppler of the LOS component of each Rician path; it is applied only for Rician paths
+    'DirectPathInitialPhase', [0 pi/3 -pi/2], ... % initial phase of LOS component of each Rician path; they depend on the distance TX-RX. It represents the phase with which the specific path arrives at the RX when the simulation starts.
     'MaximumDopplerShift', maximumDopplerShift_Hz, ... % maximum Doppler magnitude of the diffuse fading components paths
     'PathGainsOutputPort', true, ... % returns also the instaneous gains of all the paths
     'RandomStream', 'Global stream'); % keeps generating casual fading components
@@ -506,7 +508,7 @@ rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 % - kT : noise spectral density;
 % - kTB : total noise power ideal;
 % - F is the linear noise factor, it adds to the ideal total noise power  
-% the noise added in reception by RX
+% the noise added in reception by RX device.
 % notice that B is the width of the frequencies window through which the RX
 % let pass the noise, (the greater --> the more noise we let get into RX).
 % here it is calculated by comm.ThermalNoise() taking advantage of its
@@ -522,10 +524,10 @@ rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 % NoiseMethod = 'Noise figure':
 % the receiver noise figure characterizes the noise introduced by the
 % receiver electronics, assuming the standard reference temperature 290 K.
-% Add290KAntennaNoise = true:
-% adds both:
-%   1. thermal noise received from an equivalent 290 K antenna;
-%   2. equivalent receiver circuit noise associated with the noise figure.
+% Add290KAntennaNoise = true, adds also: thermal noise received from an
+% equivalent 290 K antenna, hence it takes into account also the EM noise 
+% of the environment; other than the equivalent receiver circuit noise 
+% associated with the noise figure.
 % Consequently, the total input-referred noise power is equivalent to:
 %   Pnoise = k * 290 K * Fs * F 
 % for ReferenceLoad = 1 ohm.
@@ -535,7 +537,8 @@ thermalNoiseChannel = comm.ThermalNoise( ...
     'NoiseFigure', receiverNoiseFigure_dB, ... % equivalent noise of the RX electronics
     'SampleRate', Fs, ...
     'ReferenceLoad', referenceLoad_Ohm, ... % how to interpret the numerical amplitude of the signal
-    'Add290KAntennaNoise', true); % whether we want to introdue the thermal noise of the antenna at 290 K other than the one of the RX
+    'Add290KAntennaNoise', true); % whether we want to introdue the thermal 
+% noise of the antenna at 290 K other than the one of the RX device.
 % Add antenna and receiver thermal noise at the receiver input.
 rxSignalAtAntenna = thermalNoiseChannel(rxSignalImpaired);
 
@@ -543,7 +546,8 @@ rxSignalAtAntenna = thermalNoiseChannel(rxSignalImpaired);
 % Convert gain in dB into an amplitude multiplier.
 % so this block performs: LNA, mixer, IF amplifier, baseband amplifier
 rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
-% Apply the same gain to signal AND noise.
+% Apply the same gain to signal AND noise. So to bring the signal in a
+% level compatible for my ADC. It is a fixed front-end analog gain.
 rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -602,13 +606,17 @@ syncDetectionThreshold = 0.55;
 % A power equal to 0.25 correspondes to an RMS amplitude of sqrt(0.25)=0.5
 % We do not use power=1, so to leave a certain margin to an eventual
 % saturation of RX.
-coarseTargetPower = 0.25;
+% coaorseGain adds a variable analog gain added to the fixed 80 dB frontend
+coarseTargetPower = 0.25; % adimensional as a MATLAB unit (nomore Watt/dB)
+% NOTE! it must be compliant to the variable: "adcFullScale" of the ADC,
+% for the clipping, in order to avoid clipping complex samples.
 % Coarse gain limits.
 % the Coarse AGC can attenuate up to a factor of: 0.05
 % or amplify up to a factor of: 30.
 coarseMinGain = 0.05;
 coarseMaxGain = 30;
 % Fine gain limits.
+% fineGain is a digital gain added after ADC conversion
 % The Fine AGC has to perform only a small final correction, because the
 % main part has been already corrected by the Coarse AGC.
 fineMinGain = 0.5;
@@ -663,7 +671,7 @@ for k = 1:numBursts
     tSlot = globalSampleIndices / Fs; % Fs = [samples/second], do the math
     fRel = relativeCarrierFrequencies(frequencyChannels(k)); % FH scheme
     % Downconversion bring the entire time slot back to baseband
-    % raw because we still have to appli Coarse AGC
+    % raw because we still have to apply Coarse AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
 
        % 2.1. SIMPLE COARSE AGC
@@ -705,9 +713,9 @@ for k = 1:numBursts
         % Calculate the required gain to obtain the objective power.
         % Remember: power is the square of the amplitude --> sqrt()
         % If:
-        % Pout = gain^2 * Pin
+        % P_out = gain^2 * P_in
         % Then:
-        % gain = sqrt(Pout / Pin)
+        % gain = sqrt(P_out / P_in)
         coarseGain = sqrt( ...
             coarseTargetPower / ...
             max(measuredCoarsePower,1e-12));
@@ -716,7 +724,10 @@ for k = 1:numBursts
             max(coarseGain,coarseMinGain), ...
             coarseMaxGain);
         % Apply the same gain to the whole slot.
-        rxSlotBaseband = coarseGain * rxSlotBasebandRaw;
+        rxSlotBaseband = coarseGain * rxSlotBasebandRaw; % so now we have 
+        % tried to set the average power of the "rxSlotBaseband" to the 
+        % "coarseTargetPower" that is adimensional, is just a MATLAB scale,
+        % not anymore in Watt or dB as we did in the channel modeling.
     
        % 2.2. SIMPLE ADC MODEL
         adcNumBits = 10; % maximum number of available bits to represent values
@@ -838,7 +849,7 @@ for k = 1:numBursts
         % AGC Fine is required in order to finalize the coarse AGC, over the
         % precise found synchronization symbols.
         % Fine AGC must be implemented once we have understood which samples
-        % belong to the burst, the timing must be known.
+        % belong to the burst, the timing must be known!
         % Extract the pilots received.
         receivedFinePilotSymbols = rxBurstSymbols(carrierPilotIndicesInBurst);
         % Average power of the received pilots.
