@@ -126,16 +126,19 @@ end
 %% Time-Frequency Hopping
 % NOTE! we are also distribuiting the burst over a pseudo-casual time
 % pattern.
-% symbol rate = 13 MHz; maximum 17 MHz, use it as a hyperparameter
+% symbol rate = 13 MHz; maximum 17 MHz, check if the one derived is
+% compliant to these numbers.
 % parameters
 numFrequencyChannels = 4;
-symbolRate = 13e6; % 13MHz
-% NOTE! TODO! symbolRate has been hardcoded even though should derive from 
-% math formulas as: symbolRate = channelBandwidth/(1+rolloff)
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
 dutyCycle = 0.25;
 fMin = 1435e6;
 fMax = 1518e6;
+% Configuration of Root Raised Cosine TX Filter, we configure the "rolloff"
+% now, because is used to calculate the Symbol Rate from the formula below
+rolloff = 0.35; % how much extra band we use for the RRC filter
+% TLC formula for Symbol Rate: symbolRate = channelBandwidth/(1+rolloff)
+symbolRate = ((fMax - fMin)/numFrequencyChannels)/(1 + rolloff);
 % timing
 burstTxTime = symbolsPerBurstWithCP / symbolRate;     % seconds
 slotDuration = burstTxTime / dutyCycle;               % seconds
@@ -164,7 +167,6 @@ shapedBurstTime = ...
     (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
 maxOffset = slotDuration - shapedBurstTime;
 
-
 intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
 % array of values between 1 and #numFrequencyChannles of length #numBursts
 frequencyChannels = randi( ...
@@ -175,20 +177,6 @@ carrierForBurst = carrierFrequencies(frequencyChannels).';
 startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset; % arrray
 endTimes = startTimes + burstTxTime; % array
 
-%{
-% display hopping table
-hoppingTable = table( ...
-    (1:numBursts).', ...
-    timeSlots.', ...
-    startTimes*1e6, ...
-    endTimes*1e6, ...
-    frequencyChannels, ...
-    carrierForBurst/1e6, ...
-    'VariableNames', ...
-    {'BurstID','TimeSlot','Start_us','End_us', ...
-     'FrequencyChannel','Carrier_MHz'});
-disp(hoppingTable);
-%}
 
 %% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
@@ -209,8 +197,6 @@ samplesPerSymbol = 8; % number of samples per symbol
 Fs = symbolRate * samplesPerSymbol; % sampling frequency, since we are 
 % constructing the signal from the symbol to the the continuous time domain 
 % we need more samples to represent one symbol.
-% Configuration of Root Raised Cosine TX Filter
-rolloff = 0.35; % how much extra band we use
 % NOTE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
 % IF we transmit simultaneously multiple bursts per time slot we could
 % experience ACI, since our channel spacing is roughly 13.83 MHz --> set
@@ -542,7 +528,8 @@ thermalNoiseChannel = comm.ThermalNoise( ...
 % Add antenna and receiver thermal noise at the receiver input.
 rxSignalAtAntenna = thermalNoiseChannel(rxSignalImpaired);
 
-%% 10. Receiver analog front-end gain
+%% 10. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
+% Complementary)
 % Convert gain in dB into an amplitude multiplier.
 % so this block performs: LNA, mixer, IF amplifier, baseband amplifier
 rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
@@ -575,7 +562,7 @@ rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
 
 % Configuration of knownSyncSymbols for Time Synchronization(4.CORRELATION)
 % numbers of complete symbols inside the syncReference
-numSyncSymbols = floor(length(syncReference) / bitsPerSymbol);
+numSyncSymbols = floor((length(syncReference) + length(phaseReference)) / bitsPerSymbol);
 % The first #numSyncSymbols of each burst are symbols for synchronization, 
 % and are equal for all bursts
 knownSyncSymbols = modulatedBursts(1:numSyncSymbols, 1);
