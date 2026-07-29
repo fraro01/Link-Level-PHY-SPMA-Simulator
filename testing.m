@@ -60,7 +60,8 @@ rng('shuffle'); % come back to random sequence for all rest of the script
 % integer superior part of the log2 --> add minimum number of indexing bits
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
-framedBursts = zeros(bitsPerBurst + 48 + 48 + numIndexBits, numBursts);
+framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
+                        length(phaseReference) + numIndexBits, numBursts);
 for k = 1:numBursts
     % decimal to binary, with numIndexBits as #bits of result, most
     % significant bit is put left (used in TLC), then we transpose it: .'
@@ -161,14 +162,13 @@ filterSpan = 12; % RRC filter duration in symbols NOTE! the longer it lasts
 % over time, the sharper it is over the frequencies. 
 % I have defined it here, even though the RRC is implemented in the next
 % block. But it is essential to define it here in order to prevent the
-%  transmission of a burst to create tails that exceed their own allocated 
+% transmission of a burst to create tails that exceed their own allocated 
 % time slot.
-shapedBurstTime = ...
-    (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
+shapedBurstTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
 maxOffset = slotDuration - shapedBurstTime;
 
 intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
-% array of values between 1 and #numFrequencyChannles of length #numBursts
+% array of values between 1 and #numFrequencyChannels of length #numBursts
 frequencyChannels = randi( ...
     [1 numFrequencyChannels], ...
     numBursts, ...
@@ -415,7 +415,7 @@ ricianKFactor = [30, ...
 % NOTE! actually the others two minor taps are reflected by the sea and
 % probably by the wing of the aircraft --> we could model them with a
 % predominant deterministic component with respect to the diffuse component
-% as well! --> Rice insetad of Rayleigh (K>0).
+% as well! --> Rice instead of Rayleigh (K>0).
 % Notice that the doppler shift is usually applied only for the Rice,
 % because the Rayleigh is constituted only by many diffuse components by
 % which attributing a single neat frequency shift is too difficult, hence
@@ -562,7 +562,8 @@ rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
 
 % Configuration of knownSyncSymbols for Time Synchronization(4.CORRELATION)
 % numbers of complete symbols inside the syncReference
-numSyncSymbols = floor((length(syncReference) + length(phaseReference)) / bitsPerSymbol);
+numSyncSymbols = floor((length(syncReference) + length(phaseReference)) ... 
+                                    / bitsPerSymbol);
 % The first #numSyncSymbols of each burst are symbols for synchronization, 
 % and are equal for all bursts
 knownSyncSymbols = modulatedBursts(1:numSyncSymbols, 1);
@@ -586,6 +587,7 @@ rxRRCsync = comm.RaisedCosineReceiveFilter( ... % pulse shaping filter RX
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
 % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
+% for diagnostic purposes
 syncDetectionThreshold = 0.55;
 
 % COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
@@ -685,7 +687,7 @@ for k = 1:numBursts
         % - the 25% has power higher than the threshold.
         % NOTE! TODO! adjust the percentile based on the Duty Cycle set.
         powerThreshold = prctile(slotSamplePower,75);
-        % Select the samples probaly belonging to the burst.
+        % Select the samples probably belonging to the burst.
         activeSamples = slotSamplePower >= powerThreshold; % array of: 1/0
         % Safety check.
         % Normally activeSamples contains at least 25% of samples.
@@ -739,7 +741,7 @@ for k = 1:numBursts
         % Complex ADC output. after clipping and quantization
         rxSlotBasebandADC = rxADCReal + 1j*rxADCImag;   
 
-    % 3. RCC FILTER WITHOUT DECIMATION
+    % 3. RRC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
     rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
 
@@ -775,8 +777,7 @@ for k = 1:numBursts
         receivedSyncCandidate = ...
             rxSlotMatched(syncSampleIndices);
         % Local energy of the received sequence
-        receivedEnergy = sum( ...
-            abs(receivedSyncCandidate).^2);
+        receivedEnergy = sum(abs(receivedSyncCandidate).^2);
         % if the energy is above this threshold we proceed, otherwise no
         if receivedEnergy > 1e-12
             % normalize it, to compare with the normalized known sequence
@@ -816,7 +817,7 @@ for k = 1:numBursts
 
     % 8. EXTRACTION OF THE SYMBOLS OF THE BURST
     % now we know both:
-    %   - tepmoral position;
+    %   - temporal position;
     %   - correct sampling phase.
     % We sample a value each #samplePerSymbols samples
     burstSampleIndices = firstCPSample + ...
@@ -871,10 +872,10 @@ for k = 1:numBursts
             carrierPilotProducts = ...
                 receivedCarrierPilotSymbols .* conj(knownCarrierPilotSymbols); % so
             % NOTE! carrierPilotProducts contains only the complex exponential: 
-            % exp(j*(2πΔft + ϕ0​)) only in the case of a flayt channel! In case of
+            % exp(j*(2πΔft + ϕ0​)) only in the case of a flat channel! In case of
             % multipath, like ours, it also contains: current pilots, other pilots
             % and symbols, ISI, transient of RRC --> hence the phase we feed to the
-            % plyfit below also contains: linear phase due to CFO, phase/distortion
+            % polyfit below also contains: linear phase due to CFO, phase/distortion
             % due to multipath, noise. Neighbouring symbols contribute to each
             % received symbol
             % hence it works as long as: the LOS dominates, other taps are small,
@@ -890,8 +891,7 @@ for k = 1:numBursts
             
             % 8.2.4. ESTIMATE PHASE INTERCEPT AND PHASE SLOPE
             % The first known pilot has relative symbol index zero.
-            carrierPilotRelativeIndex = ...
-                (0:numCarrierPilotSymbols-1).';
+            carrierPilotRelativeIndex = (0:numCarrierPilotSymbols-1).';
             % Linear least-squares fit:
             % keep in mind the error we must correct: ϕ(t) = 2πΔft + ϕ0​
             % phase(m) ≈ slope*m + intercept
@@ -924,7 +924,12 @@ for k = 1:numBursts
             % CP symbols: -cpLength, ..., -1
             % First synchronization: 0
             % Last useful symbol: symbolsPerBurst-1
-            burstRelativeSymbolIndex = (-cpLength:symbolsPerBurst-1).';
+            burstRelativeSymbolIndex = (-cpLength:symbolsPerBurst-1).'; % it 
+            % start from negative since it also includes the CP, but the
+            % reference point (0) coincides with the first sample of the
+            % sync reference symbols (as we did in TX). Negative values are
+            % inserted since the angular phase rotation allows them, it is
+            % an elegant consequence of the conversions: linear<->angular
             assert( ...
                 length(burstRelativeSymbolIndex) == length(rxBurstSymbols), ...
            'Carrier-correction vector and received burst have different lengths.');
@@ -1047,9 +1052,7 @@ for k = 1:numBursts
 end
 
 % Remove 8-PSK padding
-rxFramedBursts = rxFramedBurstsPadded( ...
-    1:end-numPadBits8PSK, ...
-    :);
+rxFramedBursts = rxFramedBurstsPadded(1:end-numPadBits8PSK, :);
 % check for the errors Tx - Rx
 %{%}
 numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:))
