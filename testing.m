@@ -229,7 +229,8 @@ relativeCarrierFrequencies = carrierFrequencies - fCenter;
 for k = 1:numBursts
     reset(txRRC); % clean the filter memory per each burst
     burstSymbols = txSCFDEBursts(:,k); % from where we sample
-    % Add zeros to flush the TX/RX filter memory
+    % Add zeros to flush the TX/RX filter memory response tail for last
+    % symbol
     burstSymbolsPadded = [burstSymbols; zeros(extraSymbols,1)];
     % Pulse shaping
     shapedBurst = txRRC(burstSymbolsPadded);
