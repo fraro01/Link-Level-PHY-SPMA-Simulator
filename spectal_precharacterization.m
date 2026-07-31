@@ -21,10 +21,9 @@ clc;
 %{%}
 % rolloff = 1; % [0;1]
 % filterSpan = 15; % in symbols
-nominalChannelBandwidth_Hz = 13e6;
-symbolRate = nominalChannelBandwidth_Hz / (1 + rolloff);
+channelBandwidth = 13e6;
+symbolRate = channelBandwidth / (1 + rolloff);
 Fs = symbolRate * samplesPerSymbol;
-
 
 
 %% 1. Ideal baseband waveform
@@ -47,6 +46,8 @@ for k = 1:numBursts % iterate over all 28 bursts
 end
 % concatenate vertically the content
 txWaveformIdeal = vertcat(idealShapedBursts{:});
+% NOTE! INTERESTING TO CHECK!
+% txWaveformIdeal = txSignal;
 
 %% 2. Power Spectral Density 
 % we use PWELCH to estimate PSD since FFT could be quite noisy due to 
@@ -98,7 +99,7 @@ referenceLevels_dBc = [-40 -50 -60];
 % vector to store results
 spectralWidths_Hz = zeros(size(referenceLevels_dBc));
 % minimum of the absolute values of the frequencies
-[~,centerIndex] = min(abs(frequencyAxis_Hz)); % ~ ignores the value, 
+[~,centerIndex] = min(abs(frequencyAxis_Hz)); % ~ ignores the first value, 
 % instead take just the position
 for k = 1:length(referenceLevels_dBc)
     level = referenceLevels_dBc(k);
@@ -124,19 +125,20 @@ instantaneousPower = abs(txWaveformIdeal).^2;
 % peak-average ratio in dB
 papr_dB = 10*log10(max(instantaneousPower) / mean(instantaneousPower));
 
-%% 6. Net throughput
-% TODO! pay attention that these values remain calculated on the basis of
-% the Symbol Rate set on the workspace by the LinkLevel.m simulator!
-% fix these calculations accordingly!
-% the same is for the PAPR! and maybe even other parameters!!! check
-% everyone of them!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Net_Throughput_bps = packetLength / totalPacketTime; 
-% Gross_Throughput_bps = numEncodedBits / totalPacketTime; 
-% Gross_actual_ perBurst_Throughput_bps = bitsPerFramedBurst / burstTxTime;
-% Net_perBurst_Throughput_bps =  (packetLength/numBursts) / burstTxTime;
+%% 6. Different Throughputs Calculations
+% there are two distinct throughput measures (with or without Duty Cycle), 
+% but always as Gross measures, since the link-level (PHY) does not 
+% differentiate bits.
+% throughput calculated: symbolRate x bitsPerSymbol (without Duty Cycle)
+groos_throughput_without_DC = symbolRate*log2(M); 
+% gross thoughput as: numTotalBits / TotalTime (with duty cycle)
+gross_throughput_with_DC = symbolsPerBurstWithCP*bitsPerSymbol / ...
+            ((symbolsPerBurstWithCP/symbolRate)/dutyCycle);
 
 %% Results
 fprintf('\n--- SPECTRAL PRE-CHARACTERIZATION ---\n'); % title
+fprintf('Roll-off: %.0f%%, Filter Span: %.0f symbols\n', rolloff*100, ... 
+                        filterSpan); % fundamental parameters used
 fprintf('Symbol rate: %.3f Msymbol/s\n', symbolRate/1e6); % symbolRate used
 fprintf('OBW 99%%: %.3f MHz\n', occupiedBandwidth99_Hz/1e6); % OBW 99%
 fprintf('OBW 99.9%%: %.3f MHz\n', occupiedBandwidth999_Hz/1e6); % OBW 99.9%
@@ -147,7 +149,14 @@ for k = 1:length(referenceLevels_dBc) % spectrum width at desired levels
         spectralWidths_Hz(k)/1e6);
 end
 fprintf('PAPR: %.3f dB\n', papr_dB); % PAPR
-fprintf('Net throughput: %.3f Mb/s\n', Net_Throughput_bps/1e6);
+fprintf('---------------------'); % div
+fprintf('\n--- List of Different Throughputs ---\n'); % sub-title
+fprintf(['Gross throughput without Duty Cycle ' ...
+    '(symbolRate X bitsPerSymbol): %.3f Mb/s\n'], ...
+            groos_throughput_without_DC/1e6);
+fprintf('Gross throughput with Duty Cycle: %.3f Mb/s\n', ...
+                                             gross_throughput_with_DC/1e6);
+fprintf('------------------------------------------\n'); % report end
 
 %% Single summary plot
 figure; % open the graphical window
@@ -156,10 +165,12 @@ plot(frequencyAxis_Hz/1e6, ...
     'LineWidth',1.2);
 grid on; % activate the grid on the graph
 hold on; % allow to write over the already present plot without erasing it
-% Nominal 13 MHz channel
-%xline(-6.5,'--','-6.5 MHz');
-%xline( 6.5,'--','+6.5 MHz');
-% Occupied bandwidth limits
+% Nominal MHz channel limits
+xline(-channelBandwidth/2/1e6, '--', ...
+    sprintf('-%.3f MHz', channelBandwidth/2/1e6));
+xline(channelBandwidth/2/1e6, '--', ...
+    sprintf('%.3f MHz', channelBandwidth/2/1e6));
+% Occupied bandwidth limits 
 xline(frequencyAxis_Hz(lowerIndex99)/1e6,'-.','OBW 99%');
 xline(frequencyAxis_Hz(upperIndex99)/1e6,'-.');
 xline(frequencyAxis_Hz(lowerIndex999)/1e6,':','OBW 99.9%');
@@ -169,11 +180,56 @@ yline(-40,'--','-40 dBc');
 yline(-50,'--','-50 dBc');
 yline(-60,'--','-60 dBc');
 xlabel('Frequency relative to carrier [MHz]');
-ylabel('Normalized PSD [dBc/Hz]');
-title('Waveform Spectral Pre-characterization nominalChannelBandwidth = 20.75 MHz');
+ylabel('PSD relative to peak [dB]');
+title(sprintf(['Waveform Spectral Pre-characterization\n' ...
+               'Nominal Channel Bandwidth: %.3f MHz\n' ...
+               'Roll-off: %.0f%%, Filter Span: %.0f symbols'], ...
+               channelBandwidth/1e6, ...
+               rolloff*100, ...
+               filterSpan));
 xlim([-25 25]); % view limits
 ylim([-100 5]); % view limits
 hold off; % release the hold on
+
+
+
+%% Time-domain whole waveform envelope
+timeAxis_us = ((0:length(txWaveformIdeal)-1).' / Fs) * 1e6; % microseconds
+figure;
+% absolute value of a complex number is the envelope or magnitude
+plot(timeAxis_us, abs(txWaveformIdeal), 'LineWidth', 1.1); 
+grid on;
+xlabel('Time [\mus]'); % since on the first line we multiplied by 1e6
+ylabel('Magnitude'); % magnitude, abs or envelope
+title('Whole Baseband Waveform Envelope');
+xlim([timeAxis_us(1), timeAxis_us(end)]);
+
+%% Select one burst
+burstIndex = 1;
+burstWaveform = idealShapedBursts{burstIndex};
+burstTime_us = ((0:length(burstWaveform)-1).' / Fs) * 1e6;
+
+%% Single-burst envelope
+figure;
+plot(burstTime_us, abs(burstWaveform), 'LineWidth', 1.1);
+grid on;
+xlabel('Time [\mus]');
+ylabel('Magnitude');
+title(sprintf('Baseband Waveform Envelope — Burst %d', burstIndex));
+xlim([burstTime_us(1), burstTime_us(end)]);
+
+%% Time-domain I/Q components of one burst
+figure;
+plot(burstTime_us, real(burstWaveform), 'LineWidth', 1.0);
+hold on;
+plot(burstTime_us, imag(burstWaveform), 'LineWidth', 1.0);
+grid on;
+xlabel('Time [\mus]');
+ylabel('Amplitude');
+title(sprintf('Baseband Waveform — Burst %d', burstIndex));
+legend('In-phase I', 'Quadrature Q', 'Location', 'best');
+xlim([burstTime_us(1), burstTime_us(end)]);
+hold off;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                  END SPECTRAL PRE-CHARACTERIZATION                      %
