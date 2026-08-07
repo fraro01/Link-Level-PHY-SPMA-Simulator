@@ -165,8 +165,13 @@ filterSpan = 12; % RRC filter duration in symbols NOTE! the longer it lasts
 % transmission of a burst to create tails that exceed their own allocated 
 % time slot.
 shapedBurstTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
-maxOffset = slotDuration - shapedBurstTime;
-
+% TX tuner delay: 1 microsecond
+tunerDelay_s = 1e-6;
+% Maximum random intra-slot offset.
+% Reserve tunerDelay_s at the beginning so that the complete
+% transmitted waveform remains inside its allocated time slot.
+maxOffset = slotDuration - shapedBurstTime - tunerDelay_s;
+% Random transmission position inside the available part of the slot
 intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
 % array of values between 1 and #numFrequencyChannels of length #numBursts
 frequencyChannels = randi( ...
@@ -174,7 +179,8 @@ frequencyChannels = randi( ...
     numBursts, ...
     1);
 carrierForBurst = carrierFrequencies(frequencyChannels).';
-startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset; % arrray
+startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset + ...
+            tunerDelay_s; % arrray
 endTimes = startTimes + burstTxTime; % array
 
 
@@ -962,7 +968,7 @@ fprintf('RMS error: %.3e\n', errRMS);
 
 
 %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
-%% SC-FDE Demodulation with ZF Equalization
+%% SC-FDE Demodulation with MMSE Equalization
 N = symbolsPerBurst;
 Ncp = cpLength;
 % Known pilot bits available in each burst
@@ -1018,6 +1024,15 @@ for k = 1:numBursts % cycle over all bursts
     % unknown variables.
     h_hat = A \ y; % solves the system: A * h_hat ≈ y, hence we get the 
     % estimates of the channel from our knonw pilots
+    % Pilot residual after channel reconstruction, to estimate White Noise,
+    % by taking advantage of the pilots, and just before the equalizer
+    % indeed! for the MMSE denominator: (σ_n)^2/(σ_x)^2
+    pilotResidual = y - A*h_hat;
+    % Estimate effective noise + unmodelled interference variance
+    % If: (σ_n)^2 --> 0, MMSE converges to ZF
+    noiseVarHat = mean(abs(pilotResidual).^2);
+    % Symbol power (again for MMSE)
+    Px = mean(abs(knownPilotSymbols).^2);
     h_est_bursts(:,k) = h_hat; % saves the times response estimates by 
     % burst k
     % Convert time-domain channel estimate to frequency domain
@@ -1026,11 +1041,9 @@ for k = 1:numBursts % cycle over all bursts
     H_est_bursts(:,k) = H_hat; % saves the frequency response estimates by 
     % burst k
     % SC-FDE Equalization
-    % TODO! implement MMSE
     Y = fft(rxBurst, N);
-    % ZF with protection against very small H
-    epsFloor = 1e-6;
-    W = conj(H_hat) ./ (abs(H_hat).^2 + epsFloor);
+    % MMSE equalizaer
+    W = conj(H_hat) ./ (abs(H_hat).^2 + noiseVarHat/Px);
     Xhat = W .* Y; % equalization
     rxEqualizedBursts(:,k) = ifft(Xhat, N);
 end
