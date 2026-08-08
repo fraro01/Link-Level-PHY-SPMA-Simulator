@@ -170,6 +170,7 @@ tunerDelay_s = 1e-6;
 % Maximum random intra-slot offset.
 % Reserve tunerDelay_s at the beginning so that the complete
 % transmitted waveform remains inside its allocated time slot.
+% the tuner delay is absorbed inside the allocated time slot of the burst!!
 maxOffset = slotDuration - shapedBurstTime - tunerDelay_s;
 % Random transmission position inside the available part of the slot
 intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
