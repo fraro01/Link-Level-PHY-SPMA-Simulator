@@ -60,7 +60,8 @@ rng('shuffle'); % come back to random sequence for all rest of the script
 % integer superior part of the log2 --> add minimum number of indexing bits
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
-framedBursts = zeros(bitsPerBurst + 48 + 48 + numIndexBits, numBursts);
+framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
+                        length(phaseReference) + numIndexBits, numBursts);
 for k = 1:numBursts
     % decimal to binary, with numIndexBits as #bits of result, most
     % significant bit is put left (used in TLC), then we transpose it: .'
@@ -107,7 +108,7 @@ end
 
 
 %% SC-FDE Modulation, Cyclic Prefix 
-cpLength = 16; % TODO! this must be set acccording to the channel length
+cpLength = 16; % TODO! Must exceed the maximum channel delay in symbols
 % adding the space for the cyclic prefix
 txSCFDEBursts = zeros(symbolsPerBurst + cpLength, numBursts);
 for k = 1:numBursts
@@ -126,16 +127,19 @@ end
 %% Time-Frequency Hopping
 % NOTE! we are also distribuiting the burst over a pseudo-casual time
 % pattern.
-% symbol rate = 13 MHz; maximum 17 MHz, use it as a hyperparameter
+% symbol rate = 13 MHz; maximum 17 MHz, check if the one derived is
+% compliant to these numbers.
 % parameters
 numFrequencyChannels = 4;
-symbolRate = 13e6; % 13MHz
-% NOTE! TODO! symbolRate has been hardcoded even though should derive from 
-% math formulas as: symbolRate = channelBandwidth/(1+rolloff)
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
 dutyCycle = 0.25;
 fMin = 1435e6;
 fMax = 1518e6;
+% Configuration of Root Raised Cosine TX Filter, we configure the "rolloff"
+% now, because is used to calculate the Symbol Rate from the formula below
+rolloff = 0.35; % how much extra band we use for the RRC filter
+% TLC formula for Symbol Rate: symbolRate = channelBandwidth/(1+rolloff)
+symbolRate = ((fMax - fMin)/numFrequencyChannels)/(1 + rolloff);
 % timing
 burstTxTime = symbolsPerBurstWithCP / symbolRate;     % seconds
 slotDuration = burstTxTime / dutyCycle;               % seconds
@@ -158,37 +162,28 @@ filterSpan = 12; % RRC filter duration in symbols NOTE! the longer it lasts
 % over time, the sharper it is over the frequencies. 
 % I have defined it here, even though the RRC is implemented in the next
 % block. But it is essential to define it here in order to prevent the
-%  transmission of a burst to create tails that exceed their own allocated 
+% transmission of a burst to create tails that exceed their own allocated 
 % time slot.
-shapedBurstTime = ...
-    (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
-maxOffset = slotDuration - shapedBurstTime;
-
-
+shapedBurstTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
+% TX tuner delay: 1 microsecond
+tunerDelay_s = 1e-6;
+% Maximum random intra-slot offset.
+% Reserve tunerDelay_s at the beginning so that the complete
+% transmitted waveform remains inside its allocated time slot.
+% the tuner delay is absorbed inside the allocated time slot of the burst!!
+maxOffset = slotDuration - shapedBurstTime - tunerDelay_s;
+% Random transmission position inside the available part of the slot
 intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
-% array of values between 1 and #numFrequencyChannles of length #numBursts
+% array of values between 1 and #numFrequencyChannels of length #numBursts
 frequencyChannels = randi( ...
     [1 numFrequencyChannels], ...
     numBursts, ...
     1);
 carrierForBurst = carrierFrequencies(frequencyChannels).';
-startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset; % arrray
+startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset + ...
+            tunerDelay_s; % arrray
 endTimes = startTimes + burstTxTime; % array
 
-%{
-% display hopping table
-hoppingTable = table( ...
-    (1:numBursts).', ...
-    timeSlots.', ...
-    startTimes*1e6, ...
-    endTimes*1e6, ...
-    frequencyChannels, ...
-    carrierForBurst/1e6, ...
-    'VariableNames', ...
-    {'BurstID','TimeSlot','Start_us','End_us', ...
-     'FrequencyChannel','Carrier_MHz'});
-disp(hoppingTable);
-%}
 
 %% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
 % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
@@ -209,8 +204,6 @@ samplesPerSymbol = 8; % number of samples per symbol
 Fs = symbolRate * samplesPerSymbol; % sampling frequency, since we are 
 % constructing the signal from the symbol to the the continuous time domain 
 % we need more samples to represent one symbol.
-% Configuration of Root Raised Cosine TX Filter
-rolloff = 0.35; % how much extra band we use
 % NOTE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
 % IF we transmit simultaneously multiple bursts per time slot we could
 % experience ACI, since our channel spacing is roughly 13.83 MHz --> set
@@ -243,7 +236,8 @@ relativeCarrierFrequencies = carrierFrequencies - fCenter;
 for k = 1:numBursts
     reset(txRRC); % clean the filter memory per each burst
     burstSymbols = txSCFDEBursts(:,k); % from where we sample
-    % Add zeros to flush the TX/RX filter memory
+    % Add zeros to flush the TX/RX filter memory response tail for last
+    % symbol
     burstSymbolsPadded = [burstSymbols; zeros(extraSymbols,1)];
     % Pulse shaping
     shapedBurst = txRRC(burstSymbolsPadded);
@@ -273,56 +267,286 @@ end
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                           SIMPLE CHANNEL                                %
+%                           AVIONIC CHANNEL                               %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% example of simple multipath channel, column vector, three taps,
-% IT WORKS ON THE SAMPLES, NOT ON THE SYMBOLS, the channel sees samples
-h = [0.9;       % LOS
-     0.4 + 0.2j;  % echo 1
-     0.2 - 0.1j]; % echo 2
+% Channel pipeline:
+% txSignal
+%    -> TX power normalization
+%    -> FSPL and Link Budget
+%    -> Doppler
+%    -> Rician multipath fading
+%    -> oscillator CFO and Phase Offset
+%    -> thermal AWGN
+%    -> RX front-end gain
 
-% Apply channel response as a convolution without retroaction as a FIR 
-% between the Tx signal and the channel.
-rxSignalNoiseless = filter(h, 1, txSignal);
+% The complex-baseband samples are interpreted as voltage amplitudes
+% across a 1-ohm reference load.
+% For a generic reference load R:
+%     instantaneousPower_W = abs(x[n])^2 / R
+% Since R = 1 ohm:
+%     instantaneousPower_W = abs(x[n])^2
+% This convention must be used consistently for both signal scaling (3.)
+% and thermal-noise generation (9.)
 
-% Carrier Frequency Offset (CFO) and Phase Impairments
+%% 1. Avionic scenario parameters
+% ASSUMPTION!
+% Distance and velocities remain approximately constant during one packet.
+% we could implement a sort of time variance for future implementations.
+linkDistance_m = 50e3;          % TX-RX distance
+aircraftSpeed_mps = 686;        % aircraft relative speed magnitude [m/s]
+% Convention used here:
+% radialVelocity_mps > 0  --> approaching
+% radialVelocity_mps < 0  --> moving away
+
+%% 2. Link-budget parameters
+% Transmitter power
+txPower_dBm = 48; % [dBm]                formula: x dBm = 10^(x/10) mW; 
+% dBm (Decibels RELATIVE to 1 milliwatt)
+% Antenna gains
+txAntennaGain_dBi = 6; % [dBi] (Decibels RELATIVE to Isotropic antenna)
+rxAntennaGain_dBi = 6; % RX antenna gain [dBi]
+% Feeder, cable and connector losses
+txFeederLoss_dB = 0.5;  % TX cable/connector loss [dB]
+rxFeederLoss_dB = 0.5;  % RX cable/connector loss [dB]
+% Additional propagation and implementation losses
+otherPropagationLosses_dB = 1; % polarization, implementation, etc. [dB]
+% Receiver noise and front-end parameters:
+receiverNoiseFigure_dB = 2; % added by the receiver device, degrading SNR.
+% Analog gain before the normalized ADC model. LNA/IF gain before ADC [dB]
+rxFrontEndGain_dB = 90; % The received signal at the antenna is 
+% approximately between -100 dBm and -80 dBm. Apply 80 dB of analog 
+% front-end gain to bring it approximately between -20 dBm and 0 dBm before 
+% the ADC. to make it compliant to our RX ADC.
+% check it with: 10*log10(mean(abs(rxSignalAtAntenna).^2)) for properly set
+
+%% 3. Normalize the transmitted waveform to the selected TX power
+% txSignal currently has arbitrary normalized MATLAB units.
+% Select only active transmitted samples (ommit empty tx intervals).
+txActiveSamples = abs(txSignal) > 1e-12;
+if ~any(txActiveSamples)
+    error('The transmitted waveform contains no active samples.');
+end
+% Average power of the current normalized MATLAB waveform.
+txSignalPowerArbitrary = mean(abs(txSignal(txActiveSamples)).^2);
+% Convert transmitter power from dBm to watts. 
+txPower_W = 10^((txPower_dBm - 30)/10); % standard formula
+% FUNDAMENTAL SCALING: |txSignalPhysical|^2 is interpreted as instantaneous
+% power in watts, and its active-sample average is txPower_W.
+txSignalPhysical = txSignal .* sqrt(txPower_W / txSignalPowerArbitrary);
+% square root is necessary since we are modifying the amplitude
+
+%% 4. Free Space Path Loss and link budget
+speedOfLight_mps = physconst('LightSpeed'); % for the wavelength calculus
+% Sample-wise propagation attenuation.
+largeScaleAmplitude = zeros(size(txSignalPhysical));
+% one value for each burst.
+fsplPerBurst_dB = zeros(numBursts,1);
+% different bursts are on different carriers leading to different FSPL
+for k = 1:numBursts %iterate over all the N bursts
+    % Actual RF carrier used by burst k.
+    carrierHz = carrierForBurst(k);
+    % Wavelength corresponding to the current carrier.
+    wavelength_m = speedOfLight_mps / carrierHz;
+    % Free Space Path Loss in dB.
+    fsplPerBurst_dB(k) = fspl(linkDistance_m, wavelength_m);
+    % Propagation gain excluding txPower_dBm.
+    % txPower_dBm is excluded because txSignalPhysical has already
+    % been normalized to the actual transmitter power.
+    % link budget calculation
+    propagationGain_dB = ...
+            txAntennaGain_dBi ...
+            + rxAntennaGain_dBi ...
+            - txFeederLoss_dB ...
+            - rxFeederLoss_dB ...
+            - otherPropagationLosses_dB ...
+            - fsplPerBurst_dB(k); 
+    % Convert power gain in dB into an amplitude multiplier.
+    propagationAmplitudeGain = 10^(propagationGain_dB/20);
+    % First sample occupied by the pulse-shaped burst.
+    burstStartSample = round(startTimes(k)*Fs) + 1;
+    % Include useful waveform and RRC filter tail.
+    burstLengthSamples = ...
+        (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
+    burstEndSample = min( ...
+        burstStartSample + burstLengthSamples - 1, ...
+        length(txSignalPhysical));
+    % Assign the attenuation to samples belonging to this burst.
+    largeScaleAmplitude(burstStartSample:burstEndSample) = ...
+        propagationAmplitudeGain;
+end
+% Apply large-scale gains and losses. (expressed as amplitude, not power)
+txSignalAfterLinkBudget = txSignalPhysical .* largeScaleAmplitude;
+
+%% 5. Multipath parameters
+% for a Rice model:
+%   - If K = 0, the dominant path disappears, and the Rician model reduces 
+%     perfectly to a Rayleigh model.
+%   - As K → ∞, the signal resembles an uncorrupted, stable signal with 
+%     almost zero fading.
+% PathDelays values are expressed in seconds, using symbolRate.
+% Here:
+%   path 1 -> LOS, zero delay ASSUMPTION!
+% The absolute propagation delay is neglected in the proposed channel 
+% model. As the simulator targets link-level physical-layer performance, 
+% the receiver is assumed to be synchronized to the first arriving path. 
+% Consequently, only the excess delays between the multipath components are 
+% modeled, since they determine the channel impulse response and directly 
+% affect equalization and detection performance (relative delays).
+%   path 2 -> reflection delayed by N symbol;
+%   path 3 -> reflection delayed by N+X symbols.
+% delays are taken relative from the symbol rate and samples per symbol and
+% more importantly: are strictly related to the "Lest" parameter.
+% TODO! in case of tweakings, set "Lest" parameter accordingly
+pathDelays_s = [0, ...
+                1/symbolRate, ...
+                2/symbolRate];
+% Average relative power of the paths relative to the strongest path, 
+% LOS/echo paths [dB]
+averagePathGains_dB = [0, ... % 0 gain with respect to reference (itself is taken as reference indeed it makes sense zero)
+                       -12, ... % with -12 dB --> the path has 6.31% of the power of the first path, or equivalently a 16th
+                       -18]; % with -18 dB --> the path has 1.58% of the power of the first path
+% First path is Rician with K>0 (component specular/LOS is dominant), other
+% paths are Rayleigh (because KFactor is supplied as a vector), with a 
+% diffuse component without LOS. 
+% here we've set "KFactor" as a linear ratio, not in dB, e.g.: linear_K=X
+% --> the deterministic component is X times stronger (power) than the 
+% diffuse casual component.
+% the K-factor Rician determines the ratio between: power of the
+% deterministic component (LOS) and the diffuse casual component. Since a
+% Rician channel contains a deterministic component and a diffuse casual
+% component
+ricianKFactor = [30, ...
+                 0, ... % the deterministic compoment LOS power is 0 --> Rayleigh channel
+                 0]; % the deterministic compoment LOS power is 0 --> Rayleigh channel
+% because a Rician channel with K --> 0 approaches a Rayleigh channel
+% NOTE! actually the others two minor taps are reflected by the sea and
+% probably by the wing of the aircraft --> we could model them with a
+% predominant deterministic component with respect to the diffuse component
+% as well! --> Rice instead of Rayleigh (K>0).
+% Notice that the doppler shift is usually applied only for the Rice,
+% because the Rayleigh is constituted only by many diffuse components by
+% which attributing a single neat frequency shift is too difficult, hence
+% in this case the doppler is only accounted as doppler spread spectrum.
+
+%% 6. Doppler parameters
+% Corresponding wavelength.
+minimumWavelength_m = speedOfLight_mps / fMax;
+centralWavelength_m = speedOfLight_mps / fCenter;
+% Conservative maximum Doppler magnitude used to parametrize the
+% diffuse fading process of all channel paths, for doppler spread spectrum
+maximumDopplerShift_Hz = aircraftSpeed_mps / minimumWavelength_m;
+% Signed Doppler shift of the direct LOS component
+directPathDopplerShift_Hz = aircraftSpeed_mps / centralWavelength_m;
+
+%% 7. Rician multipath fading channel
+ricianChannel = comm.RicianChannel( ...
+    'SampleRate', Fs, ... % how many samples per second the channel contains
+    'PathDelays', pathDelays_s, ... % seconds
+    'AveragePathGains', averagePathGains_dB, ... % average power of each path
+    'NormalizePathGains', true, ... % normalize the total average power of all the paths of the multipath to 1 (otherwise is greater), see below
+    'KFactor', ricianKFactor, ... % ratio between power of LOS component / power casual of diffuse component
+    'DirectPathDopplerShift', [directPathDopplerShift_Hz*cosd(10) directPathDopplerShift_Hz*cosd(45) directPathDopplerShift_Hz*cosd(5)], ... % doppler of the LOS component of each Rician path; it is applied only for Rician paths
+    'DirectPathInitialPhase', [0 pi/3 -pi/2], ... % initial phase of LOS component of each Rician path; they depend on the distance TX-RX. It represents the phase with which the specific path arrives at the RX when the simulation starts.
+    'MaximumDopplerShift', maximumDopplerShift_Hz, ... % maximum Doppler magnitude of the diffuse fading components paths
+    'PathGainsOutputPort', true, ... % returns also the instaneous gains of all the paths
+    'RandomStream', 'Global stream'); % keeps generating casual fading components
+% Apply time-varying multipath channel.
+[rxSignalFaded, pathGains] = ricianChannel(txSignalAfterLinkBudget);
+% rxSignalFaded includes:
+% - LOS component;
+% - echoes;
+% - delays of multipath;
+% - temporal variation of fading;
+% - Doppler LOS;
+% - Doppler spectrum of the diffused components.
+% "pathGains" includes the complex instaneous coefficients of the paths
+
+% regarding: "'NormalizePathGains', true":
+% normalize the total average power of all the paths of the multipath to 1 
+% (otherwise is greater), hence 0 dB; [1+0,0631+0,01585]≈1,07895 --> 
+% P_1≈0,927;P_2≈0,0585;P_3≈0,0147; it avoids that the multipath introduces 
+% more power with respect to the one already determined by link-budget, 
+% since the channel can temporarily increase or decrease power due to 
+% interferences with paths. We do this because the link-budget already 
+% contains all attenuations, the multipath must not take into account 
+% others arbitrary powers. Hence distribute the total power throught the 
+% paths, but keep the average power equal to the one already determined 
+% by the link-budget. But notice that the istantaneous value is not fixed!
+
+%% 8. Oscillator CFO and phase offset
+% Hardware-related oscillator Carrier Frequency Offset (CFO) and Phase 
+% Impairments.
 % TODO! set the following Offset parameters according to the simulation
-trueCarrierPhaseOffset_rad = deg2rad(30); % the Phase offset introduced
-trueCarrierFrequencyOffset_Hz = 14e3; % the CFO introduced
-sampleIndex = (0:length(rxSignalNoiseless)-1).'; % we start from 0 --> -1
+% These are distinct from physical propagation Doppler.
+trueCarrierPhaseOffset_rad = deg2rad(15); % the Phase offset introduced
+trueCarrierFrequencyOffset_Hz = 1e3; % the CFO introduced in Hz
+sampleIndex = (0:length(rxSignalFaded)-1).'; % we start from 0 --> -1
 timeAxis = sampleIndex / Fs; % in seconds
-% formula used below: ϕ(t) = ϕ0 + 2πΔft
+% formula used below: ϕ(t) = ϕ0 + 2πΔft | CFO makes rotating continuously 
+% the phase, Δf rotations per second; a complete rotation values 2π radians
+% hence: dϕ/dt ​= 2π⋅1000
 carrierImpairmentPhase = ...
     trueCarrierPhaseOffset_rad ...
-    + 2*pi*trueCarrierFrequencyOffset_Hz*timeAxis;
+    + 2*pi * trueCarrierFrequencyOffset_Hz * timeAxis;
 % Impair the signal with the parameters defined above
-rxSignalImpaired = rxSignalNoiseless .* exp(1j*carrierImpairmentPhase);
+rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 
-% AWGN
-SNRdB = 100; % signal to noise ratio in dB (P_signal/P_noise), but power 
-% calculus are usually performed linearly...
-SNRlin = 10^(SNRdB/10); % converts the above SNR from dB to linear value 
-% "the signal is SNRlin times greater than the noise."
+%% 9. Thermal AWGN and receiver noise figure
+% the SNR as a consequence of: transmitted power, distance, antennas gains,
+% losses, bandwidth, temperature, noise figure.
+% Convert receiver noise figure from dB to linear noise factor.
+% Receiver-input noise power, standard formula:
+% Pn = k * T * B * F    [W]
+% where:
+% - kT : noise spectral density;
+% - kTB : total noise power ideal;
+% - F is the linear noise factor, it adds to the ideal total noise power  
+% the noise added in reception by RX device.
+% notice that B is the width of the frequencies window through which the RX
+% let pass the noise, (the greater --> the more noise we let get into RX).
+% here it is calculated by comm.ThermalNoise() taking advantage of its
+% relation with the sampling frequency Fs.
 
-% Measure actual signal power only after channel effects
-% Noise variance necessary to obtain the desired SNR set above
-active = abs(rxSignalImpaired) > 1e-12; % it stores 1 and 0 (True/False)
-signalPower = mean(abs(rxSignalImpaired(active)).^2); % calculates signal 
-% power
-% only for non-zeros symbols, thanks to threshopld set above (1e-12)
-noiseVar = signalPower / SNRlin; % NOTE! the noiseVar, based on the above 
-% formulas is the P_noise, For zero-mean noise, average power equals 
-% variance.
-noise = sqrt(noiseVar/2) * ... % complex noise, divided by 2, because the variance gets divided between Re and Im
-    (randn(size(rxSignalImpaired)) + 1j*randn(size(rxSignalImpaired))); 
-% complex noise, randn generates gaussian noise with mean 0 and variance 1
+% Physical convention used in this simulation:
+%   ReferenceLoad = 1 ohm
+% Therefore, for every complex-baseband sample x[n]:
+%   instantaneousPower_W = abs(x[n])^2 
+% since P = V^2/R
+% This is coherent with the previous TX normalization, where the active
+% waveform was scaled so that its mean abs(x)^2 equals txPower_W.
+% NoiseMethod = 'Noise figure':
+% the receiver noise figure characterizes the noise introduced by the
+% receiver electronics, assuming the standard reference temperature 290 K.
+% Add290KAntennaNoise = true, adds also: thermal noise received from an
+% equivalent 290 K antenna, hence it takes into account also the EM noise 
+% of the environment; other than the equivalent receiver circuit noise 
+% associated with the noise figure.
+% Consequently, the total input-referred noise power is equivalent to:
+%   Pnoise = k * 290 K * Fs * F 
+% for ReferenceLoad = 1 ohm.
+referenceLoad_Ohm = 1;
+thermalNoiseChannel = comm.ThermalNoise( ...
+    'NoiseMethod', 'Noise figure', ...
+    'NoiseFigure', receiverNoiseFigure_dB, ... % equivalent noise of the RX electronics
+    'SampleRate', Fs, ...
+    'ReferenceLoad', referenceLoad_Ohm, ... % how to interpret the numerical amplitude of the signal
+    'Add290KAntennaNoise', true); % whether we want to introdue the thermal 
+% noise of the antenna at 290 K other than the one of the RX device.
+% Add antenna and receiver thermal noise at the receiver input.
+rxSignalAtAntenna = thermalNoiseChannel(rxSignalImpaired);
 
-rxSignal = rxSignalImpaired + noise; % add noise to the attenuated received 
-% signal
+%% 10. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
+% Complementary)
+% Convert gain in dB into an amplitude multiplier.
+% so this block performs: LNA, mixer, IF amplifier, baseband amplifier
+rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
+% Apply the same gain to signal AND noise. So to bring the signal in a
+% level compatible for my ADC. It is a fixed front-end analog gain.
+rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                        END SIMPLE CHANNEL                               %
+%                        END AVIONIC CHANNEL                              %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
@@ -346,7 +570,8 @@ rxSignal = rxSignalImpaired + noise; % add noise to the attenuated received
 
 % Configuration of knownSyncSymbols for Time Synchronization(4.CORRELATION)
 % numbers of complete symbols inside the syncReference
-numSyncSymbols = floor(length(syncReference) / bitsPerSymbol);
+numSyncSymbols = floor((length(syncReference) + length(phaseReference)) ... 
+                                    / bitsPerSymbol);
 % The first #numSyncSymbols of each burst are symbols for synchronization, 
 % and are equal for all bursts
 knownSyncSymbols = modulatedBursts(1:numSyncSymbols, 1);
@@ -370,6 +595,7 @@ rxRRCsync = comm.RaisedCosineReceiveFilter( ... % pulse shaping filter RX
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
 % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
+% for diagnostic purposes
 syncDetectionThreshold = 0.55;
 
 % COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
@@ -377,13 +603,17 @@ syncDetectionThreshold = 0.55;
 % A power equal to 0.25 correspondes to an RMS amplitude of sqrt(0.25)=0.5
 % We do not use power=1, so to leave a certain margin to an eventual
 % saturation of RX.
-coarseTargetPower = 0.25;
+% coaorseGain adds a variable analog gain added to the fixed 80 dB frontend
+coarseTargetPower = 0.25; % adimensional as a MATLAB unit (nomore Watt/dB)
+% NOTE! it must be compliant to the variable: "adcFullScale" of the ADC,
+% for the clipping, in order to avoid clipping complex samples.
 % Coarse gain limits.
 % the Coarse AGC can attenuate up to a factor of: 0.05
 % or amplify up to a factor of: 30.
 coarseMinGain = 0.05;
 coarseMaxGain = 30;
 % Fine gain limits.
+% fineGain is a digital gain added after ADC conversion
 % The Fine AGC has to perform only a small final correction, because the
 % main part has been already corrected by the Coarse AGC.
 fineMinGain = 0.5;
@@ -438,7 +668,7 @@ for k = 1:numBursts
     tSlot = globalSampleIndices / Fs; % Fs = [samples/second], do the math
     fRel = relativeCarrierFrequencies(frequencyChannels(k)); % FH scheme
     % Downconversion bring the entire time slot back to baseband
-    % raw because we still have to appli Coarse AGC
+    % raw because we still have to apply Coarse AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
 
        % 2.1. SIMPLE COARSE AGC
@@ -465,7 +695,7 @@ for k = 1:numBursts
         % - the 25% has power higher than the threshold.
         % NOTE! TODO! adjust the percentile based on the Duty Cycle set.
         powerThreshold = prctile(slotSamplePower,75);
-        % Select the samples probaly belonging to the burst.
+        % Select the samples probably belonging to the burst.
         activeSamples = slotSamplePower >= powerThreshold; % array of: 1/0
         % Safety check.
         % Normally activeSamples contains at least 25% of samples.
@@ -480,9 +710,9 @@ for k = 1:numBursts
         % Calculate the required gain to obtain the objective power.
         % Remember: power is the square of the amplitude --> sqrt()
         % If:
-        % Pout = gain^2 * Pin
+        % P_out = gain^2 * P_in
         % Then:
-        % gain = sqrt(Pout / Pin)
+        % gain = sqrt(P_out / P_in)
         coarseGain = sqrt( ...
             coarseTargetPower / ...
             max(measuredCoarsePower,1e-12));
@@ -491,7 +721,10 @@ for k = 1:numBursts
             max(coarseGain,coarseMinGain), ...
             coarseMaxGain);
         % Apply the same gain to the whole slot.
-        rxSlotBaseband = coarseGain * rxSlotBasebandRaw;
+        rxSlotBaseband = coarseGain * rxSlotBasebandRaw; % so now we have 
+        % tried to set the average power of the "rxSlotBaseband" to the 
+        % "coarseTargetPower" that is adimensional, is just a MATLAB scale,
+        % not anymore in Watt or dB as we did in the channel modeling.
     
        % 2.2. SIMPLE ADC MODEL
         adcNumBits = 10; % maximum number of available bits to represent values
@@ -516,7 +749,7 @@ for k = 1:numBursts
         % Complex ADC output. after clipping and quantization
         rxSlotBasebandADC = rxADCReal + 1j*rxADCImag;   
 
-    % 3. RCC FILTER WITHOUT DECIMATION
+    % 3. RRC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
     rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
 
@@ -552,8 +785,7 @@ for k = 1:numBursts
         receivedSyncCandidate = ...
             rxSlotMatched(syncSampleIndices);
         % Local energy of the received sequence
-        receivedEnergy = sum( ...
-            abs(receivedSyncCandidate).^2);
+        receivedEnergy = sum(abs(receivedSyncCandidate).^2);
         % if the energy is above this threshold we proceed, otherwise no
         if receivedEnergy > 1e-12
             % normalize it, to compare with the normalized known sequence
@@ -593,7 +825,7 @@ for k = 1:numBursts
 
     % 8. EXTRACTION OF THE SYMBOLS OF THE BURST
     % now we know both:
-    %   - tepmoral position;
+    %   - temporal position;
     %   - correct sampling phase.
     % We sample a value each #samplePerSymbols samples
     burstSampleIndices = firstCPSample + ...
@@ -613,7 +845,7 @@ for k = 1:numBursts
         % AGC Fine is required in order to finalize the coarse AGC, over the
         % precise found synchronization symbols.
         % Fine AGC must be implemented once we have understood which samples
-        % belong to the burst, the timing must be known.
+        % belong to the burst, the timing must be known!
         % Extract the pilots received.
         receivedFinePilotSymbols = rxBurstSymbols(carrierPilotIndicesInBurst);
         % Average power of the received pilots.
@@ -648,10 +880,10 @@ for k = 1:numBursts
             carrierPilotProducts = ...
                 receivedCarrierPilotSymbols .* conj(knownCarrierPilotSymbols); % so
             % NOTE! carrierPilotProducts contains only the complex exponential: 
-            % exp(j*(2πΔft + ϕ0​)) only in the case of a flayt channel! In case of
+            % exp(j*(2πΔft + ϕ0​)) only in the case of a flat channel! In case of
             % multipath, like ours, it also contains: current pilots, other pilots
             % and symbols, ISI, transient of RRC --> hence the phase we feed to the
-            % plyfit below also contains: linear phase due to CFO, phase/distortion
+            % polyfit below also contains: linear phase due to CFO, phase/distortion
             % due to multipath, noise. Neighbouring symbols contribute to each
             % received symbol
             % hence it works as long as: the LOS dominates, other taps are small,
@@ -667,8 +899,7 @@ for k = 1:numBursts
             
             % 8.2.4. ESTIMATE PHASE INTERCEPT AND PHASE SLOPE
             % The first known pilot has relative symbol index zero.
-            carrierPilotRelativeIndex = ...
-                (0:numCarrierPilotSymbols-1).';
+            carrierPilotRelativeIndex = (0:numCarrierPilotSymbols-1).';
             % Linear least-squares fit:
             % keep in mind the error we must correct: ϕ(t) = 2πΔft + ϕ0​
             % phase(m) ≈ slope*m + intercept
@@ -701,7 +932,12 @@ for k = 1:numBursts
             % CP symbols: -cpLength, ..., -1
             % First synchronization: 0
             % Last useful symbol: symbolsPerBurst-1
-            burstRelativeSymbolIndex = (-cpLength:symbolsPerBurst-1).';
+            burstRelativeSymbolIndex = (-cpLength:symbolsPerBurst-1).'; % it 
+            % start from negative since it also includes the CP, but the
+            % reference point (0) coincides with the first sample of the
+            % sync reference symbols (as we did in TX). Negative values are
+            % inserted since the angular phase rotation allows them, it is
+            % an elegant consequence of the conversions: linear<->angular
             assert( ...
                 length(burstRelativeSymbolIndex) == length(rxBurstSymbols), ...
            'Carrier-correction vector and received burst have different lengths.');
@@ -733,7 +969,7 @@ fprintf('RMS error: %.3e\n', errRMS);
 
 
 %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
-%% SC-FDE Demodulation with ZF Equalization
+%% SC-FDE Demodulation with MMSE Equalization
 N = symbolsPerBurst;
 Ncp = cpLength;
 % Known pilot bits available in each burst
@@ -789,6 +1025,15 @@ for k = 1:numBursts % cycle over all bursts
     % unknown variables.
     h_hat = A \ y; % solves the system: A * h_hat ≈ y, hence we get the 
     % estimates of the channel from our knonw pilots
+    % Pilot residual after channel reconstruction, to estimate White Noise,
+    % by taking advantage of the pilots, and just before the equalizer
+    % indeed! for the MMSE denominator: (σ_n)^2/(σ_x)^2
+    pilotResidual = y - A*h_hat;
+    % Estimate effective noise + unmodelled interference variance
+    % If: (σ_n)^2 --> 0, MMSE converges to ZF
+    noiseVarHat = mean(abs(pilotResidual).^2);
+    % Symbol power (again for MMSE)
+    Px = mean(abs(knownPilotSymbols).^2);
     h_est_bursts(:,k) = h_hat; % saves the times response estimates by 
     % burst k
     % Convert time-domain channel estimate to frequency domain
@@ -797,11 +1042,9 @@ for k = 1:numBursts % cycle over all bursts
     H_est_bursts(:,k) = H_hat; % saves the frequency response estimates by 
     % burst k
     % SC-FDE Equalization
-    % TODO! implement MMSE
     Y = fft(rxBurst, N);
-    % ZF with protection against very small H
-    epsFloor = 1e-6;
-    W = conj(H_hat) ./ (abs(H_hat).^2 + epsFloor);
+    % MMSE equalizaer
+    W = conj(H_hat) ./ (abs(H_hat).^2 + noiseVarHat/Px);
     Xhat = W .* Y; % equalization
     rxEqualizedBursts(:,k) = ifft(Xhat, N);
 end
@@ -824,9 +1067,7 @@ for k = 1:numBursts
 end
 
 % Remove 8-PSK padding
-rxFramedBursts = rxFramedBurstsPadded( ...
-    1:end-numPadBits8PSK, ...
-    :);
+rxFramedBursts = rxFramedBurstsPadded(1:end-numPadBits8PSK, :);
 % check for the errors Tx - Rx
 %{%}
 numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:))

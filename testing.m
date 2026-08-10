@@ -995,6 +995,8 @@ Lest = 3; % length of the discrete impulsive response we want to estimate.
 rxEqualizedBursts = zeros(symbolsPerBurst, numBursts); % equalized bursts
 H_est_bursts = zeros(N, numBursts); % channel estimation in frequency
 h_est_bursts = zeros(Lest, numBursts); % channel estimation in time
+% estimated noise variance after MMSE equalization for 8-PSK LLR demod
+noiseVarAfterEq = zeros(numBursts,1);
 for k = 1:numBursts % cycle over all bursts
     rxBurstCP = rxSCFDEBursts(:,k);
     % Remove CP
@@ -1046,67 +1048,104 @@ for k = 1:numBursts % cycle over all bursts
     % MMSE equalizaer
     W = conj(H_hat) ./ (abs(H_hat).^2 + noiseVarHat/Px);
     Xhat = W .* Y; % equalization
-    rxEqualizedBursts(:,k) = ifft(Xhat, N);
+    % Back to time/symbol domain
+    rxBurstEqualized = ifft(Xhat, N);    
+
+    % POST-MMSE residual gain estimation using pilots (for potential 
+    % ampitude gain and phase rotations on the burst)
+    % Extract equalized pilots
+    rxPilotEqualized = rxBurstEqualized(1:numPilotSymbols);    
+    % Estimate residual complex gain:
+    % rxPilotEqualized ~= gHat * knownPilotSymbols + residual
+    % Least Sqaures estimate of gHat, (notice we cannot simplify since are 
+    % vectors and matrices operations)
+    gHat = (knownPilotSymbols' * rxPilotEqualized) / ...
+           (knownPilotSymbols' * knownPilotSymbols);    
+    % Numerical safety if too low gain
+    if abs(gHat) < 1e-8
+        gHat = 1;
+    end
+    % Normalize the whole burst    
+    rxBurstEqualized = rxBurstEqualized / gHat;
+    % Store normalized equalized burst
+    rxEqualizedBursts(:,k) = rxBurstEqualized;   
+    % Effective post-MMSE variance estimation    
+    % Equalized and normalized pilots
+    rxPilotEqualized = rxBurstEqualized(1:numPilotSymbols);    
+    % Effective residual actually seen by the soft demapper (8-PSK demod)
+    % variance from ground-truth!
+    postEqResidual = rxPilotEqualized - knownPilotSymbols;    
+    % Effective post-equalizatoin error variance (is a power since it is 
+    % the square modulus of a complex number representing symbols)
+    noiseVarAfterEq(k) = ...
+    sum(abs(postEqResidual).^2) / max(numPilotSymbols - 1, 1);  % -1 since 
+    % we have already consumed one degree of freedom in Least Square estim
+    % Numerical floor, to avoid a too low variance that could explose LLR
+    noiseVarAfterEq(k) = max(noiseVarAfterEq(k), 1e-8);
 end
 
 
 %% 8-PSK Demodulation
 rxModulatedBursts = rxEqualizedBursts; 
 % due to channel effects
-rxFramedBurstsPadded = zeros(symbolsPerBurst*bitsPerSymbol, numBursts);
-
+rxFramedBurstsPaddedLLR = zeros(symbolsPerBurst*bitsPerSymbol, numBursts);
 for k = 1:numBursts
     rxSymbols_k = rxModulatedBursts(:,k);
-    rxSymbolIndices = pskdemod( ...
+    % estimated noise variance at the MMSE equalizer output
+    noiseVariance_k = noiseVarAfterEq(k); 
+    % MATLAB pskdemod LLR convention:
+    %   positive LLR -> bit 0 more likely
+    %   negative LLR -> bit 1 more likely
+    burstLLR = pskdemod( ...
         rxSymbols_k, ...
         M, ...
         pi/M, ...
-        'gray');
-    rxBitGroups = de2bi(rxSymbolIndices, bitsPerSymbol, 'left-msb');
-    rxFramedBurstsPadded(:,k) = reshape(rxBitGroups.', [], 1);
+        'gray', ...
+        'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the lilelihoods
+        'NoiseVariance', noiseVariance_k);
+    rxFramedBurstsPaddedLLR(:,k) = burstLLR; % a soft value per each bit
 end
-
 % Remove 8-PSK padding
-rxFramedBursts = rxFramedBurstsPadded(1:end-numPadBits8PSK, :);
-% check for the errors Tx - Rx
-%{%}
-numErrors8PSK = sum(rxFramedBursts(:) ~= framedBursts(:))
+rxFramedBurstsLLR = rxFramedBurstsPaddedLLR(1:end-numPadBits8PSK, :);
 
 
 %% Turbo decoder
-% Random burst loss simulation
-numLostBursts = 0;                     % choose manually
-lostBurstIdx = randperm(numBursts, numLostBursts);
 % Recover encoded packet from bursts
 headerLength = length(syncReference) + ...
                length(phaseReference) + ...
                numIndexBits;
-rxBurstsPayload = rxFramedBursts(headerLength+1:end,:); % remove headers
-rxEncodedPacketPadded = reshape(rxBurstsPayload,[],1); % stack into column
-rxEncodedPacket = rxEncodedPacketPadded(1:numEncodedBits); % leave padding
+%remove headers
+rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
+% stack into column
+rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1); 
+% leave padding
+rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits); 
 
-% Ideal Channel: No noise
-% The decoder does not want bit 0/1, instead soft values.
-% Typical convention:
-% bit 0 -> -1
-% bit 1 -> +1
-rxSoft = 2*double(rxEncodedPacket) - 1;
+% Diagnostic check-point: convert LLR sign back to hard decisions
+%{%}
+rxEncodedPacketHardFromLLR = rxEncodedPacketLLR < 0;
+numErrorsLLRHard = sum(rxEncodedPacketHardFromLLR ~= encodedPacket);
+fprintf('Hard errors inferred from LLR sign: %d\n', numErrorsLLRHard);
 
-payloadBitsPerBurst = size(rxBurstsPayload,1);
+% Random burst loss simulation
+numLostBursts = 0; % TODO! choose manually (remove it once added colored N)
+lostBurstIdx = randperm(numBursts, numLostBursts);
+payloadBitsPerBurst = size(rxBurstsPayloadLLR,1);
 for b = lostBurstIdx % iterate over erased bursts
     firstBit = (b-1)*payloadBitsPerBurst + 1; % take also the first burst, 
     % hence 0, furthermore MATLAB starts from 1 not 0 
     lastBit  = min(b*payloadBitsPerBurst, numEncodedBits); % handle also 
     % the case of the last burst in which there was padding (minimum len)
-    rxSoft(firstBit:lastBit) = 0; % set these bits to zero
+    % LLR=0 means that neither bit 0 nor bit 1 is preferred
+    rxEncodedPacketLLR(firstBit:lastBit) = 0; % set these bits to zero
 end
-
-% numIterations = 6; the default is 6
+% numIterations = 6; % the default is 6
 turboDec = comm.TurboDecoder( ...
     'InterleaverIndices', interleaverIndices);
     %'NumIterations', numIterations);
-decodedPacket = turboDec(rxSoft);
+% convention used by turboDecoder MATLAB is with the reversed values (-)
+decodedPacket = turboDec(-rxEncodedPacketLLR); 
 
-% Just to compare
+% Diagnostic chek-point: just to compare the whole packet from Tx to Rx
 %{%}
 numFinalErrors = sum(packet ~= decodedPacket)
