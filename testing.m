@@ -218,7 +218,6 @@ txRRC = comm.RaisedCosineTransmitFilter( ...
     'FilterSpanInSymbols',filterSpan, ...
     'OutputSamplesPerSymbol',samplesPerSymbol); % how many samples it 
 % outputs per symbol the RRC
-totalFilterDelaySymbols = filterSpan;
 totalTime = max(endTimes); % final time for transmitting the whole packet 
 % (last burst)
 symbolsPerBurstWithCP = size(txSCFDEBursts,1);
@@ -492,7 +491,18 @@ carrierImpairmentPhase = ...
 % Impair the signal with the parameters defined above
 rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 
-%% 9. Thermal AWGN and receiver noise figure
+%% 9. Colored Noise from Interferers (external auxiliary script)
+% colored noise of the intererfers, comes from the auxiliar external script
+numInterferers = 5; % set the number of interferer nodes, NOTE! it
+% resembles an ALOHA network!
+interferer_waveform = interferers(numInterferers, txSCFDEBursts); % calls
+% the external script
+maxLength = max(length(interferer_waveform), length(rxSignalImpaired));
+rxSignalImpaired(end+1:maxLength, 1) = 0;
+interferer_waveform(end+1:maxLength, 1) = 0; 
+rxSignalWithInterference = rxSignalImpaired + interferer_waveform;
+
+%% 10. Thermal AWGN and receiver noise figure
 % the SNR as a consequence of: transmitted power, distance, antennas gains,
 % losses, bandwidth, temperature, noise figure.
 % Convert receiver noise figure from dB to linear noise factor.
@@ -534,9 +544,9 @@ thermalNoiseChannel = comm.ThermalNoise( ...
     'Add290KAntennaNoise', true); % whether we want to introdue the thermal 
 % noise of the antenna at 290 K other than the one of the RX device.
 % Add antenna and receiver thermal noise at the receiver input.
-rxSignalAtAntenna = thermalNoiseChannel(rxSignalImpaired);
+rxSignalAtAntenna = thermalNoiseChannel(rxSignalWithInterference);
 
-%% 10. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
+%% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
 % Complementary)
 % Convert gain in dB into an amplitude multiplier.
 % so this block performs: LNA, mixer, IF amplifier, baseband amplifier
@@ -596,7 +606,8 @@ rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
 % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
 % for diagnostic purposes
-syncDetectionThreshold = 0.55;
+syncDetectionThreshold = 0.3; % TODO! make it variable on the basis of the 
+% Blanking Compensation!
 
 % COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
 % Approximate desired power at the output of the Coarse AGC.
@@ -645,6 +656,9 @@ carrierPilotIndicesInBurst = cpLength + (1:numCarrierPilotSymbols);
 % Storage for the Carrier Frequency Synchronization Estimates
 estimatedCarrierPhaseOffset_rad = nan(numBursts, 1);
 estimatedCarrierFrequencyOffset_Hz = nan(numBursts, 1);
+
+% For burst erasure
+burstDetected = false(numBursts,1);
 
 % NOTE! this is the main external cycle that iterates over all the bursts, 
 % and it's divided into 8 distinct sections, with some sub-sections as well
@@ -816,8 +830,12 @@ for k = 1:numBursts
              '= %.3f.'], ...
             k, ...
             bestMetric);
+        % we mark the burst as erased
+        burstDetected(k) = false;
         continue;
     end
+    % we mark the burst as found
+    burstDetected(k) = true;
 
     % 7. FIND WHERE THE CP START
     % The preamble is the first element after the CP
@@ -836,6 +854,7 @@ for k = 1:numBursts
         warning( ...
             'Burst %d detected, but not entirely contained in the slot.', ...
             k);
+        burstDetected(k) = false; % burst marked as erased
         continue;
     end
 
@@ -998,6 +1017,11 @@ h_est_bursts = zeros(Lest, numBursts); % channel estimation in time
 % estimated noise variance after MMSE equalization for 8-PSK LLR demod
 noiseVarAfterEq = zeros(numBursts,1);
 for k = 1:numBursts % cycle over all bursts
+    % if the current burst was not found (erased), we directly skip its
+    % channel estimation/MMSE
+    if ~burstDetected(k)
+        continue;
+    end
     rxBurstCP = rxSCFDEBursts(:,k);
     % Remove CP
     rxBurst = rxBurstCP(cpLength+1 : cpLength+symbolsPerBurst);
@@ -1034,6 +1058,7 @@ for k = 1:numBursts % cycle over all bursts
     % Estimate effective noise + unmodelled interference variance
     % If: (σ_n)^2 --> 0, MMSE converges to ZF
     noiseVarHat = mean(abs(pilotResidual).^2);
+    noiseVarHat = max(noiseVarHat, 1e-12); % floor for safety
     % Symbol power (again for MMSE)
     Px = mean(abs(knownPilotSymbols).^2);
     h_est_bursts(:,k) = h_hat; % saves the times response estimates by 
@@ -1090,6 +1115,14 @@ rxModulatedBursts = rxEqualizedBursts;
 % due to channel effects
 rxFramedBurstsPaddedLLR = zeros(symbolsPerBurst*bitsPerSymbol, numBursts);
 for k = 1:numBursts
+    % if the current burst was not found (erased), we directly skip its
+    % demodulation
+    if ~burstDetected(k)
+        % Erased burst --> leave all LLRs equal to zero, initializated in:
+        % 'rxFramedBurstsPaddedLLR'; sync failure⇒burst erasure⇒LLR=0⇒
+        % ⇒Turbo decoder receives no information from that burst.
+        continue;
+    end
     rxSymbols_k = rxModulatedBursts(:,k);
     % estimated noise variance at the MMSE equalizer output
     noiseVariance_k = noiseVarAfterEq(k); 
