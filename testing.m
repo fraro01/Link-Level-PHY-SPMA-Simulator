@@ -493,7 +493,7 @@ rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 
 %% 9. Colored Noise from Interferers (external auxiliary script)
 % colored noise of the intererfers, comes from the auxiliar external script
-numInterferers = 5; % set the number of interferer nodes, NOTE! it
+numInterferers = 0; % set the number of interferer nodes, NOTE! it
 % resembles an ALOHA network!
 interferer_waveform = interferers(numInterferers, txSCFDEBursts); % calls
 % the external script
@@ -555,6 +555,13 @@ rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
 % level compatible for my ADC. It is a fixed front-end analog gain.
 rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
 
+%% 12. Blanking Compensation when the RX is Transmitting
+% call the external auxiliary function
+blankingMask = blanking_mask(rxSignal, burstTxTime, numBursts, ...
+                            slotDuration, Fs);
+% Apply local-transmit blanking
+rxSignal = rxSignal .* blankingMask; % element-wise multiplication with 1/0
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                        END AVIONIC CHANNEL                              %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -606,8 +613,14 @@ rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
 % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
 % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
 % for diagnostic purposes
+
 syncDetectionThreshold = 0.3; % TODO! make it variable on the basis of the 
 % Blanking Compensation!
+% TODO! tweak the following parameter!
+minUsableSyncFraction = 0.25; % for Blanking Compensation variable threshold
+% this parameter sets the minimum fraction of symbols blanked by which we
+% can still try to recover the burst
+% (usable_sync_symbols/total_sync_symbols).
 
 % COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
 % Approximate desired power at the output of the Coarse AGC.
@@ -766,6 +779,11 @@ for k = 1:numBursts
     % 3. RRC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
     rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
+    % for the blanking mask slot: since the RRC filter introduces a delay 
+    % of filterSpan/2​⋅samplesPerSymbol we must delay also the blanking mask
+    % slot when we correlate the candidate so to find the proper instants
+    % blanked, so keeping into account the tails for the slot!
+    rxRRCGroupDelaySamples = filterSpan * samplesPerSymbol / 2;
 
     % 4. CORRELATION METRIC CALCULUS
     % For each possible sample q, we take:
@@ -790,6 +808,10 @@ for k = 1:numBursts
     numCandidates = lastCandidate - firstCandidate + 1; % number of 
     % candidated POSITIONS for starting the preamble (in samples)
     syncMetric = zeros(numCandidates, 1);
+    % for blanking compensation
+    numBlankedSyncSymbols = zeros(numCandidates,1);
+    % variable threshold for blanking compensation per candidate
+    syncThresholdCandidate = zeros(numCandidates,1);
     for candidateIdx = 1:numCandidates
         q = firstCandidate + candidateIdx - 1;
         % possible samples of sync symbols 
@@ -815,27 +837,85 @@ for k = 1:numBursts
             % to cope with phase rotation of the channel, the modulus
             % reimans unchanged while the angle could change
         end
+        % BLANKING COMPENSATION
+        % syncSampleIndices are LOCAL indices referred to rxSlotMatched.
+        % To interrogate the global blankingMask, they must first be converted
+        % back to the GLOBAL RX timeline.
+        % Moreover, rxSlotMatched is delayed by the RX RRC group delay, so that
+        % delay must be removed before checking the blanking state.        
+        globalBlankingSampleIndices = ...
+            (slotStartSample - 1) ...
+            + syncSampleIndices ...
+            - rxRRCGroupDelaySamples;        
+        % Verify that the reconstructed global indices are inside the complete
+        % blankingMask.
+        validMaskIndices = ...
+            globalBlankingSampleIndices >= 1 & ...
+            globalBlankingSampleIndices <= length(blankingMask);        
+        % Default assumption for samples outside the modeled RX waveform:
+        % receiver available.
+        candidateBlankingStates = ones(numSyncSymbols,1);        
+        % Read the actual local-TX blanking state from the GLOBAL mask.
+        candidateBlankingStates(validMaskIndices) = ...
+            blankingMask(globalBlankingSampleIndices(validMaskIndices));        
+        % Number of known synchronization symbols whose nominal sampling
+        % instants fall inside a local-TX blanking interval.
+        numBlankedSyncSymbols(candidateIdx) = ...
+            sum(candidateBlankingStates == 0);
+        % varibale threshold for blanking compensation
+        numUsableSyncSymbols = numSyncSymbols - ...
+            numBlankedSyncSymbols(candidateIdx);
+        usableFraction = numUsableSyncSymbols / numSyncSymbols;
+        % important check-point if too many symbols are blanked
+        if usableFraction < minUsableSyncFraction
+            syncThresholdCandidate(candidateIdx) = Inf; % with 'inf' the 
+            % candidate is not valid
+        else        
+            syncThresholdCandidate(candidateIdx) = ...
+                syncDetectionThreshold * usableFraction;        
+        end
     end
 
-    % 5. LOOK FOR THE MAXIMUM CORRELATION
-    % take the maximum and its position
-    [bestMetric, bestCandidateIdx] = max(syncMetric);
-    % position of the first sync symbol in the output of the adapted filter
-    firstSyncSample = firstCandidate + bestCandidateIdx - 1;
+    % 5. LOOK FOR THE BEST CORRELATION CANDIDATE
+    % Since every candidate has its own blanking-compensated threshold,
+    % compare candidates through the normalized detection score:
+    %       detectionScore(q) = syncMetric(q) / threshold(q)
+    % Hence:
+    %       score > 1  --> candidate passes its threshold
+    %       score = 1  --> candidate exactly at threshold
+    %       score < 1  --> candidate fails detection    
+    detectionScore = zeros(numCandidates,1);    
+    % Candidates with threshold = Inf were rejected because too few
+    % synchronization symbols were available.
+    validCandidates = isfinite(syncThresholdCandidate);    
+    % Compute the normalized score only for usable candidates.
+    detectionScore(validCandidates) = ...
+        syncMetric(validCandidates) ./ ...
+        syncThresholdCandidate(validCandidates);    
+    % Find candidate that most strongly exceeds its own compensated threshold.
+    [bestScore, bestCandidateIdx] = max(detectionScore);    
+    % Store diagnostic quantities for the selected candidate.
+    bestMetric = syncMetric(bestCandidateIdx);
+    bestThreshold = syncThresholdCandidate(bestCandidateIdx);
+    bestNumBlanked = numBlankedSyncSymbols(bestCandidateIdx);    
 
     % 6. DETECTION DECISION
-    if bestMetric < syncDetectionThreshold
+    if bestScore < 1
         warning( ...
-            ['Burst %d not detected: synchronization metric ' ...
-             '= %.3f.'], ...
-            k, ...
-            bestMetric);
-        % we mark the burst as erased
-        burstDetected(k) = false;
+            ['Burst %d not detected: metric = %.3f, ' ...
+             'blanked symbols = %d/%d, threshold = %.3f, ' ...
+             'detection score = %.3f.'], ...
+             k, ...
+             bestMetric, ...
+             bestNumBlanked, ...
+             numSyncSymbols, ...
+             bestThreshold, ...
+             bestScore);
         continue;
     end
-    % we mark the burst as found
-    burstDetected(k) = true;
+
+    % position of the first sync symbol in the output of the adapted filter
+    firstSyncSample = firstCandidate + bestCandidateIdx - 1;
 
     % 7. FIND WHERE THE CP START
     % The preamble is the first element after the CP
@@ -857,6 +937,9 @@ for k = 1:numBursts
         burstDetected(k) = false; % burst marked as erased
         continue;
     end
+
+    % Burst Erasure
+    burstDetected(k) = true;
 
     rxBurstSymbols = rxSlotMatched(burstSampleIndices);
 

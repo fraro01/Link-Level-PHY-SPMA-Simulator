@@ -48,6 +48,7 @@ end
 txWaveformIdeal = vertcat(idealShapedBursts{:});
 % NOTE! INTERESTING TO CHECK!
 % txWaveformIdeal = interferer_waveform;
+% txWaveformIdeal = blankingMask;
 
 %% 2. Power Spectral Density 
 % we use PWELCH to estimate PSD since FFT could be quite noisy due to 
