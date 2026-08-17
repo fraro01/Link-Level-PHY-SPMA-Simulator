@@ -14,18 +14,21 @@
 %            RX LOCAL TRANSMIT ACTIVITY / BLANKING MASK                   %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function blankingMask = blanking_mask(rxSignal, burstTxTime, ...
-                        numBursts, slotDuration, Fs)
+% ASSUMPTION! we blank only the actual time in which the RX is actively
+% transmitting the burst, without blanking also the transients of the tails
+% of the RRC filter, so to keep blanking respecting the 25% Duty Cycle.
+
+function blankingMask = blanking_mask(rxSignal, fractionTxBursts, ...
+                        fractionBurstOccupiedTime, slotDuration, Fs)
 % 1 --> receiver available
 % 0 --> local transceiver is transmitting, hence: receiver blanked
 blankingMask = ones(size(rxSignal)); % the length must be the same of TX!
 % Duration during which RX is considered blanked.
-% We include the complete shaped transmitted burst.
-rxTxBlankingDuration = burstTxTime; % inlcude also the tails of RRC
+rxTxBlankingDuration = fractionBurstOccupiedTime;
 % Independent TX timing of the local transceiver
-rxTxStartTimes = zeros(numBursts,1);
-rxTxEndTimes   = zeros(numBursts,1);
-for k = 1:numBursts
+rxTxStartTimes = zeros(fractionTxBursts,1);
+rxTxEndTimes   = zeros(fractionTxBursts,1);
+for k = 1:fractionTxBursts
     slotStartTime = (k-1)*slotDuration;
     % Maximum start offset that keeps the TX pulse inside the slot
     maxRxTxOffset = slotDuration - rxTxBlankingDuration;
