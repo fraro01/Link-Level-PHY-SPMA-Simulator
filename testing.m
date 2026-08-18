@@ -64,16 +64,17 @@ rng('shuffle'); % come back to random sequence for all rest of the script
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
 framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
-                        length(phaseReference) + numIndexBits, numBursts);
+                        length(phaseReference), ... % + numIndexBits, ... 
+                        numBursts);
 for k = 1:numBursts
     % decimal to binary, with numIndexBits as #bits of result, most
     % significant bit is put left (used in TLC), then we transpose it: .'
-    burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
+  % burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
     framedBursts(:,k) = [ % take all rows of cloumn k
     % vertical concatenation of three vectors
         syncReference;        % 48 bit
         phaseReference;       % 48 bit
-        burstIndexBits;       % 5 bit: burst identifier
+      % burstIndexBits;       % 5 bit: burst identifier
         bursts(:,k)           % 144 bit coded, from column k
     ];
 end
@@ -317,9 +318,9 @@ otherPropagationLosses_dB = 1; % polarization, implementation, etc. [dB]
 receiverNoiseFigure_dB = 2; % added by the receiver device, degrading SNR.
 % Analog gain before the normalized ADC model. LNA/IF gain before ADC [dB]
 rxFrontEndGain_dB = 90; % The received signal at the antenna is 
-% approximately between -100 dBm and -80 dBm. Apply 80 dB of analog 
-% front-end gain to bring it approximately between -20 dBm and 0 dBm before 
-% the ADC. to make it compliant to our RX ADC.
+% approximately between -100 dBm and -80 dBm. Apply 90 dB of analog 
+% front-end gain to bring it approximately between -20 dBm and 10 dBm 
+% before the ADC. to make it compliant to our RX ADC.
 % check it with: 10*log10(mean(abs(rxSignalAtAntenna).^2)) for properly set
 
 %% 3. Normalize the transmitted waveform to the selected TX power
@@ -549,6 +550,7 @@ thermalNoiseChannel = comm.ThermalNoise( ...
 % Add antenna and receiver thermal noise at the receiver input.
 rxSignalAtAntenna = thermalNoiseChannel(rxSignalWithInterference);
 
+% check 10*log10(mean(abs(rxSignalAtAntenna).^2))
 %% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
 % Complementary)
 % Convert gain in dB into an amplitude multiplier.
@@ -557,10 +559,11 @@ rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
 % Apply the same gain to signal AND noise. So to bring the signal in a
 % level compatible for my ADC. It is a fixed front-end analog gain.
 rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
+% Check 10*log10(mean(abs(rxSignal).^2))
 
 %% 12. Blanking Compensation when the RX is Transmitting
 % call the external auxiliary function
-% use percentage with respect to the original value to tweak amount of 
+% use percentage with respect to the original value to tweak the number of 
 % transmitted bursts and the respective occupied time
 fractionTxBursts = round(numBursts * 1.0); % amount of TX bursts, NOTE! if 
 % we set a fraction (< 1.0), the amount of bursts will be in any case
@@ -891,7 +894,7 @@ for k = 1:numBursts
         end
     end
 
-    % 5. LOOK FOR THE BEST CORRELATION CANDIDATE
+    % 5. LOOK FOR THE BEST CORRELATION CANDIDATE, MAXIMUM NORMALIZED SCORE
     % Since every candidate has its own blanking-compensated threshold,
     % compare candidates through the normalized detection score:
     %       detectionScore(q) = syncMetric(q) / threshold(q)
@@ -1090,7 +1093,6 @@ fprintf('Max error: %.3e\n', errMax);
 fprintf('RMS error: %.3e\n', errRMS);
 
 
-
 %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
 %% SC-FDE Demodulation with MMSE Equalization
 N = symbolsPerBurst;
@@ -1238,7 +1240,7 @@ for k = 1:numBursts
         M, ...
         pi/M, ...
         'gray', ...
-        'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the lilelihoods
+        'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the likelihoods
         'NoiseVariance', noiseVariance_k);
     rxFramedBurstsPaddedLLR(:,k) = burstLLR; % a soft value per each bit
 end
@@ -1249,8 +1251,8 @@ rxFramedBurstsLLR = rxFramedBurstsPaddedLLR(1:end-numPadBits8PSK, :);
 %% Turbo decoder
 % Recover encoded packet from bursts
 headerLength = length(syncReference) + ...
-               length(phaseReference) + ...
-               numIndexBits;
+               length(phaseReference); % + ...
+             % numIndexBits;
 %remove headers
 rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
 % stack into column
@@ -1264,6 +1266,7 @@ rxEncodedPacketHardFromLLR = rxEncodedPacketLLR < 0;
 numErrorsLLRHard = sum(rxEncodedPacketHardFromLLR ~= encodedPacket);
 fprintf('Hard errors inferred from LLR sign: %d\n', numErrorsLLRHard);
 
+%{%}
 % Random burst loss simulation
 numLostBursts = 0; % TODO! choose manually (remove it once added colored N)
 lostBurstIdx = randperm(numBursts, numLostBursts);
@@ -1276,6 +1279,7 @@ for b = lostBurstIdx % iterate over erased bursts
     % LLR=0 means that neither bit 0 nor bit 1 is preferred
     rxEncodedPacketLLR(firstBit:lastBit) = 0; % set these bits to zero
 end
+
 % numIterations = 6; % the default is 6
 turboDec = comm.TurboDecoder( ... % 'TrellisStructure', trellis, ...
     'InterleaverIndices', interleaverIndices);
