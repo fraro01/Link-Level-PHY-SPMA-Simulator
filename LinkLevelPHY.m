@@ -26,11 +26,14 @@ packet = randi([0 1], packetLength, 1); %column vector not row for applying
 %% Turbo Coding
 % TODO! add trellis and numeiterations
 % NOTE! study the turbo coding functionings
+% Constituent convolutional code: rate 1/3
+trellis = poly2trellis(4, [13 15 17], 13);
 % Interleaver turbo
 interleaverIndices = randperm(packetLength);
 % Turbo encoder rate 1/3, (it is the default)
 % Use as "InterleaverIndices" the one defined above
-turboEnc = comm.TurboEncoder('InterleaverIndices', interleaverIndices);
+turboEnc = comm.TurboEncoder(... %'TrellisStructure', trellis, ...
+                'InterleaverIndices', interleaverIndices);
 % Coding
 encodedPacket = turboEnc(packet);
 
@@ -61,16 +64,17 @@ rng('shuffle'); % come back to random sequence for all rest of the script
 numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
 % matrix of zeros
 framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
-                        length(phaseReference) + numIndexBits, numBursts);
+                        length(phaseReference), ... % + numIndexBits, ... 
+                        numBursts);
 for k = 1:numBursts
     % decimal to binary, with numIndexBits as #bits of result, most
     % significant bit is put left (used in TLC), then we transpose it: .'
-    burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
+  % burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
     framedBursts(:,k) = [ % take all rows of cloumn k
     % vertical concatenation of three vectors
         syncReference;        % 48 bit
         phaseReference;       % 48 bit
-        burstIndexBits;       % 5 bit: burst identifier
+      % burstIndexBits;       % 5 bit: burst identifier
         bursts(:,k)           % 144 bit coded, from column k
     ];
 end
@@ -314,9 +318,9 @@ otherPropagationLosses_dB = 1; % polarization, implementation, etc. [dB]
 receiverNoiseFigure_dB = 2; % added by the receiver device, degrading SNR.
 % Analog gain before the normalized ADC model. LNA/IF gain before ADC [dB]
 rxFrontEndGain_dB = 90; % The received signal at the antenna is 
-% approximately between -100 dBm and -80 dBm. Apply 80 dB of analog 
-% front-end gain to bring it approximately between -20 dBm and 0 dBm before 
-% the ADC. to make it compliant to our RX ADC.
+% approximately between -100 dBm and -80 dBm. Apply 90 dB of analog 
+% front-end gain to bring it approximately between -20 dBm and 10 dBm 
+% before the ADC. to make it compliant to our RX ADC.
 % check it with: 10*log10(mean(abs(rxSignalAtAntenna).^2)) for properly set
 
 %% 3. Normalize the transmitted waveform to the selected TX power
@@ -493,7 +497,7 @@ rxSignalImpaired = rxSignalFaded .* exp(1j*carrierImpairmentPhase);
 
 %% 9. Colored Noise from Interferers (external auxiliary script)
 % colored noise of the intererfers, comes from the auxiliar external script
-numInterferers = 5; % set the number of interferer nodes, NOTE! it
+numInterferers = 0; % set the number of interferer nodes, NOTE! it
 % resembles an ALOHA network!
 interferer_waveform = interferers(numInterferers, txSCFDEBursts); % calls
 % the external script
@@ -546,6 +550,7 @@ thermalNoiseChannel = comm.ThermalNoise( ...
 % Add antenna and receiver thermal noise at the receiver input.
 rxSignalAtAntenna = thermalNoiseChannel(rxSignalWithInterference);
 
+% check 10*log10(mean(abs(rxSignalAtAntenna).^2))
 %% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
 % Complementary)
 % Convert gain in dB into an amplitude multiplier.
@@ -554,6 +559,22 @@ rxFrontEndAmplitudeGain = 10^(rxFrontEndGain_dB/20);
 % Apply the same gain to signal AND noise. So to bring the signal in a
 % level compatible for my ADC. It is a fixed front-end analog gain.
 rxSignal = rxSignalAtAntenna * rxFrontEndAmplitudeGain;
+% Check 10*log10(mean(abs(rxSignal).^2))
+
+%% 12. Blanking Compensation when the RX is Transmitting
+% call the external auxiliary function
+% use percentage with respect to the original value to tweak the number of 
+% transmitted bursts and the respective occupied time
+fractionTxBursts = round(numBursts * 1.0); % amount of TX bursts, NOTE! if 
+% we set a fraction (< 1.0), the amount of bursts will be in any case
+% smaller than 'numBursts', but not randomized, they will be all consumed
+% within the first available allocated time slots.
+fractionBurstOccupiedTime = burstTxTime * 1.0; % time occupied by a TX
+% burst
+blankingMask = blanking_mask(rxSignal, fractionTxBursts, ...   
+                            fractionBurstOccupiedTime, slotDuration, Fs);
+% Apply local-transmit blanking
+rxSignal = rxSignal .* blankingMask; % element-wise multiplication with 1/0
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                        END AVIONIC CHANNEL                              %
@@ -603,11 +624,17 @@ rxRRCsync = comm.RaisedCosineReceiveFilter( ... % pulse shaping filter RX
     'DecimationFactor', 1);
 % where to store the syncohronized bursts
 rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
+
 % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
 % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
 % for diagnostic purposes
-syncDetectionThreshold = 0.3; % TODO! make it variable on the basis of the 
-% Blanking Compensation!
+syncDetectionThreshold = 0.275; % TODO! make it variable on the basis of 
+% the Blanking Compensation!
+% TODO! tweak the following parameter!
+minUsableSyncFraction = 0.33; % Blanking Compensation variable threshold
+% this parameter sets the minimum fraction of sync symbols not-blanked by  
+% which we can still try to recover the burst
+% (usable_sync_symbols/total_sync_symbols).
 
 % COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
 % Approximate desired power at the output of the Coarse AGC.
@@ -657,7 +684,7 @@ carrierPilotIndicesInBurst = cpLength + (1:numCarrierPilotSymbols);
 estimatedCarrierPhaseOffset_rad = nan(numBursts, 1);
 estimatedCarrierFrequencyOffset_Hz = nan(numBursts, 1);
 
-% For burst erasure
+% for Burst Erasure
 burstDetected = false(numBursts,1);
 
 % NOTE! this is the main external cycle that iterates over all the bursts, 
@@ -766,8 +793,13 @@ for k = 1:numBursts
     % 3. RRC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
     rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
+    % for the blanking mask slot: since the RRC filter introduces a delay 
+    % of filterSpan/2​⋅samplesPerSymbol we must delay also the blanking mask
+    % slot when we correlate the candidate so to find the proper instants
+    % blanked, so keeping into account the tails for the slot!
+    rxRRCGroupDelaySamples = filterSpan * samplesPerSymbol / 2;
 
-    % 4. CORRELATION METRIC CALCULUS
+    % 4. CORRELATION METRIC CALCULUS + BLANKING COMPENSATION 
     % For each possible sample q, we take:
     % q,
     % q + samplesPerSymbol,
@@ -790,14 +822,16 @@ for k = 1:numBursts
     numCandidates = lastCandidate - firstCandidate + 1; % number of 
     % candidated POSITIONS for starting the preamble (in samples)
     syncMetric = zeros(numCandidates, 1);
+    % for blanking compensation
+    numBlankedSyncSymbols = zeros(numCandidates,1);
+    % variable threshold for blanking compensation per candidate
+    syncThresholdCandidate = zeros(numCandidates,1);
     for candidateIdx = 1:numCandidates
         q = firstCandidate + candidateIdx - 1;
         % possible samples of sync symbols 
-        syncSampleIndices = q + ...
-            (0:numSyncSymbols-1).' * samplesPerSymbol;
+        syncSampleIndices = q + (0:numSyncSymbols-1).' * samplesPerSymbol;
         % Possible samples candidated
-        receivedSyncCandidate = ...
-            rxSlotMatched(syncSampleIndices);
+        receivedSyncCandidate = rxSlotMatched(syncSampleIndices);
         % Local energy of the received sequence
         receivedEnergy = sum(abs(receivedSyncCandidate).^2);
         % if the energy is above this threshold we proceed, otherwise no
@@ -815,27 +849,95 @@ for k = 1:numBursts
             % to cope with phase rotation of the channel, the modulus
             % reimans unchanged while the angle could change
         end
+        % BLANKING COMPENSATION
+        % syncSampleIndices are LOCAL indices referred to rxSlotMatched.
+        % To interrogate the global blankingMask, they must first be converted
+        % back to the GLOBAL RX timeline.
+        % Moreover, rxSlotMatched is delayed by the RX RRC group delay, so that
+        % delay must be removed before checking the blanking state.        
+        globalBlankingSampleIndices = ...
+            (slotStartSample - 1) ...   % scalar
+            + syncSampleIndices ...     % vector
+            - rxRRCGroupDelaySamples;   % scalar
+        % Verify that the reconstructed global indices are inside the complete
+        % blankingMask.
+        validMaskIndices = ...
+            globalBlankingSampleIndices >= 1 & ...
+            globalBlankingSampleIndices <= length(blankingMask);        
+        % Default ASSUMPTION! for samples outside the modeled RX waveform:
+        % receiver available.
+        candidateBlankingStates = ones(numSyncSymbols,1);        
+        % Read the actual local-TX blanking state from the GLOBAL mask.
+        % This is the key step for determining which of the 32 candidate sync symbols
+        % are actually blanked. candidateBlankingStates is initially set to all ones.
+        % Only the candidates that satisfy the blanking-mask boundaries, identified by
+        % validMaskIndices, are updated. Their values are set to the corresponding
+        % entries of the global blankingMask, using globalBlankingSampleIndices to map
+        % each candidate sync symbol to its position in the global mask.
+        candidateBlankingStates(validMaskIndices) = ...
+            blankingMask(globalBlankingSampleIndices(validMaskIndices));        
+        % Number of known synchronization symbols whose nominal sampling
+        % instants fall inside a local-TX blanking interval.
+        numBlankedSyncSymbols(candidateIdx) = ...
+            sum(candidateBlankingStates == 0);
+        % varibale threshold for blanking compensation
+        numUsableSyncSymbols = numSyncSymbols - ...
+            numBlankedSyncSymbols(candidateIdx);
+        usableFraction = numUsableSyncSymbols / numSyncSymbols;
+        % important check-point if too many symbols are blanked
+        if usableFraction < minUsableSyncFraction
+            syncThresholdCandidate(candidateIdx) = Inf; % with 'inf' the 
+            % candidate is not valid
+        else        % calculate the variable threshold of Blanking Compens
+            syncThresholdCandidate(candidateIdx) = ...
+                syncDetectionThreshold * usableFraction;        
+        end
     end
 
-    % 5. LOOK FOR THE MAXIMUM CORRELATION
-    % take the maximum and its position
-    [bestMetric, bestCandidateIdx] = max(syncMetric);
-    % position of the first sync symbol in the output of the adapted filter
-    firstSyncSample = firstCandidate + bestCandidateIdx - 1;
+    % 5. LOOK FOR THE BEST CORRELATION CANDIDATE, MAXIMUM NORMALIZED SCORE
+    % Since every candidate has its own blanking-compensated threshold,
+    % compare candidates through the normalized detection score:
+    %       detectionScore(q) = syncMetric(q) / threshold(q)
+    % Hence:
+    %       score > 1  --> candidate passes its threshold
+    %       score = 1  --> candidate exactly at threshold
+    %       score < 1  --> candidate fails detection    
+    detectionScore = zeros(numCandidates,1);    
+    % Candidates with threshold = Inf were rejected because too few
+    % synchronization symbols were available.
+    validCandidates = isfinite(syncThresholdCandidate);    
+    % Compute the normalized score only for usable candidates.
+    detectionScore(validCandidates) = ...
+        syncMetric(validCandidates) ./ ...
+        syncThresholdCandidate(validCandidates);    
+    % Find candidate that most strongly exceeds its own compensated threshold.
+    [bestScore, bestCandidateIdx] = max(detectionScore);    
+    % Store diagnostic quantities for the selected candidate.
+    bestMetric = syncMetric(bestCandidateIdx);
+    bestThreshold = syncThresholdCandidate(bestCandidateIdx);
+    bestNumBlanked = numBlankedSyncSymbols(bestCandidateIdx);    
 
-    % 6. DETECTION DECISION
-    if bestMetric < syncDetectionThreshold
+    % 6. DETECTION DECISION - CHANNEL ERASURE
+    if bestScore < 1
         warning( ...
-            ['Burst %d not detected: synchronization metric ' ...
-             '= %.3f.'], ...
-            k, ...
-            bestMetric);
-        % we mark the burst as erased
-        burstDetected(k) = false;
+            ['Burst %d not detected:\n' ...
+             'Preamble sync correlation = %.3f\n' ...
+             'Blanked symbols = %d/%d\n' ...
+             'Variable threshold computed (detection_threshold x '...
+             'usable_fraction) = %.3f\n' ...
+             'Detection score (preamble_sync_correlation / ' ...
+             'variable_threshold_computed) = %.3f.'], ...
+             k, ...
+             bestMetric, ...
+             bestNumBlanked, ...
+             numSyncSymbols, ...
+             bestThreshold, ...
+             bestScore);
         continue;
     end
-    % we mark the burst as found
-    burstDetected(k) = true;
+
+    % position of the first sync symbol in the output of the adapted filter
+    firstSyncSample = firstCandidate + bestCandidateIdx - 1;
 
     % 7. FIND WHERE THE CP START
     % The preamble is the first element after the CP
@@ -848,15 +950,20 @@ for k = 1:numBursts
     % We sample a value each #samplePerSymbols samples
     burstSampleIndices = firstCPSample + ...
         (0:symbolsPerBurstWithCP-1).' * samplesPerSymbol;
-
+    % if the samples are not contained in the boundaries set by the
+    % allocated time slot extracted in samples
     if burstSampleIndices(1) < 1 || ... % || (or)
         burstSampleIndices(end) > numMatchedSamples
         warning( ...
-            'Burst %d detected, but not entirely contained in the slot.', ...
+          'Burst %d detected, but not entirely contained in the slot.', ...
             k);
         burstDetected(k) = false; % burst marked as erased
         continue;
     end
+
+    % Burst Erasure,If the two conditions above are overcome --> the burst 
+    % is not erased
+    burstDetected(k) = true;
 
     rxBurstSymbols = rxSlotMatched(burstSampleIndices);
 
@@ -984,7 +1091,6 @@ errMax = max(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)));
 errRMS = sqrt(mean(abs(rxSCFDEBursts(:) - txSCFDEBursts(:)).^2));
 fprintf('Max error: %.3e\n', errMax);
 fprintf('RMS error: %.3e\n', errRMS);
-
 
 
 %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
@@ -1134,7 +1240,7 @@ for k = 1:numBursts
         M, ...
         pi/M, ...
         'gray', ...
-        'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the lilelihoods
+        'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the likelihoods
         'NoiseVariance', noiseVariance_k);
     rxFramedBurstsPaddedLLR(:,k) = burstLLR; % a soft value per each bit
 end
@@ -1145,8 +1251,8 @@ rxFramedBurstsLLR = rxFramedBurstsPaddedLLR(1:end-numPadBits8PSK, :);
 %% Turbo decoder
 % Recover encoded packet from bursts
 headerLength = length(syncReference) + ...
-               length(phaseReference) + ...
-               numIndexBits;
+               length(phaseReference); % + ...
+             % numIndexBits;
 %remove headers
 rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
 % stack into column
@@ -1160,6 +1266,7 @@ rxEncodedPacketHardFromLLR = rxEncodedPacketLLR < 0;
 numErrorsLLRHard = sum(rxEncodedPacketHardFromLLR ~= encodedPacket);
 fprintf('Hard errors inferred from LLR sign: %d\n', numErrorsLLRHard);
 
+%{%}
 % Random burst loss simulation
 numLostBursts = 0; % TODO! choose manually (remove it once added colored N)
 lostBurstIdx = randperm(numBursts, numLostBursts);
@@ -1172,8 +1279,9 @@ for b = lostBurstIdx % iterate over erased bursts
     % LLR=0 means that neither bit 0 nor bit 1 is preferred
     rxEncodedPacketLLR(firstBit:lastBit) = 0; % set these bits to zero
 end
+
 % numIterations = 6; % the default is 6
-turboDec = comm.TurboDecoder( ...
+turboDec = comm.TurboDecoder( ... % 'TrellisStructure', trellis, ...
     'InterleaverIndices', interleaverIndices);
     %'NumIterations', numIterations);
 % convention used by turboDecoder MATLAB is with the reversed values (-)

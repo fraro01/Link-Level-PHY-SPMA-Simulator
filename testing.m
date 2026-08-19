@@ -687,6 +687,9 @@ estimatedCarrierFrequencyOffset_Hz = nan(numBursts, 1);
 % for Burst Erasure
 burstDetected = false(numBursts,1);
 
+% NOW!
+agcState = [];
+
 % NOTE! this is the main external cycle that iterates over all the bursts, 
 % and it's divided into 8 distinct sections, with some sub-sections as well
 % it is very big!
@@ -711,7 +714,8 @@ for k = 1:numBursts
     % Downconversion bring the entire time slot back to baseband
     % raw because we still have to apply Coarse AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
-
+    
+    %{
        % 2.1. SIMPLE COARSE AGC
         % NOTE! it is not causal since the code reads the whole slot, hence it
         % takes advantage of samples that will actually arrive in the future,
@@ -789,10 +793,15 @@ for k = 1:numBursts
         rxADCImag = adcStep * round(rxADCImag/adcStep);    
         % Complex ADC output. after clipping and quantization
         rxSlotBasebandADC = rxADCReal + 1j*rxADCImag;   
+    %}
+    
+    % NOW!
+    [rxSlotBasebandADC, agcState] = agc_model(rxSlotBasebandRaw, Fs, agcState);
+    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
 
     % 3. RRC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
-    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
+%NOW!    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
     % for the blanking mask slot: since the RRC filter introduces a delay 
     % of filterSpan/2​⋅samplesPerSymbol we must delay also the blanking mask
     % slot when we correlate the candidate so to find the proper instants
@@ -966,7 +975,9 @@ for k = 1:numBursts
     burstDetected(k) = true;
 
     rxBurstSymbols = rxSlotMatched(burstSampleIndices);
-
+    
+    % NOW!
+    %{ 
        % 8.1. SIMPLE FINE AGC 
         % AGC Fine is required in order to finalize the coarse AGC, over the
         % precise found synchronization symbols.
@@ -990,7 +1001,7 @@ for k = 1:numBursts
             fineMaxGain);
         % apply the same gain to the whole burst.
         rxBurstSymbols = fineGain * rxBurstSymbols;
-    
+    %}
            % 8.2. FEED-FORWARD CARRIER SYNCHRONIZATION (ACQUISITION)
             % 8.2.1. EXTRACT THE KNOWN CARRIER PILOTS
             receivedCarrierPilotSymbols = ... % take only the known pilots!
