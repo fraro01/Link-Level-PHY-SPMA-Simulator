@@ -715,6 +715,7 @@ for k = 1:numBursts
     % raw because we still have to apply Coarse AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
     
+    % NOW!
     %{
        % 2.1. SIMPLE COARSE AGC
         % NOTE! it is not causal since the code reads the whole slot, hence it
@@ -796,7 +797,8 @@ for k = 1:numBursts
     %}
     
     % NOW!
-    [rxSlotBasebandADC, agcState] = agc_model(rxSlotBasebandRaw, Fs, agcState);
+    [rxSlotBasebandADC, agcState] = agc_model(rxSlotBasebandRaw, Fs, ...
+                                                                agcState);
     rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
 
     % 3. RRC FILTER WITHOUT DECIMATION
