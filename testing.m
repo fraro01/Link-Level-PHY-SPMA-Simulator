@@ -687,7 +687,8 @@ estimatedCarrierFrequencyOffset_Hz = nan(numBursts, 1);
 % for Burst Erasure
 burstDetected = false(numBursts,1);
 
-% NOW!
+% initialize empty Structure Array, for storing states for the Finite
+% States Machines of the AGC
 agcState = [];
 
 % NOTE! this is the main external cycle that iterates over all the bursts, 
@@ -715,102 +716,35 @@ for k = 1:numBursts
     % raw because we still have to apply Coarse AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
     
-    % NOW!
-    %{
-       % 2.1. SIMPLE COARSE AGC
-        % NOTE! it is not causal since the code reads the whole slot, hence it
-        % takes advantage of samples that will actually arrive in the future,
-        % but a real recevier cannot do this in reality in real time!
-        % instead it would update the gain sample by sample.
-        % AGC Coarse is required in order to bring the received signal in an
-        % amplitude interval compatible with the front-end of the RX, before
-        % synchronization. It must guarantee that the analog signal does not
-        % overcome the full scale of the ADC.
-        % Put the coarse AGC after downconversion since it's easier in the
+    % 3. FINITE STATE MACHINES, retrieves the external auxiliary function: 
+    % 'agc_model' computing: 
+    % - 3.1. RF AGC
+        % RF AGC is required in order to bring the received signal in an
+        % amplitude interval compatible with the front-end of the RX, 
+        % before synchronization. It must guarantee that the analog signal 
+        % does not overcome the full scale of the ADC.
+        % Put the RF AGC after downconversion since it's easier in the
         % equivalent-baseband, because AGC depends on the modulus of the
         % signal, the frequency traslation does not modify amplitude.
-        % Calculate the istantaneous power of all the samples of the slot.
-        slotSamplePower = abs(rxSlotBasebandRaw).^2;
-        % The slot contains:
-        % - a part with the burst;
-        % - a part mainly with noise.
-        % In order to avoid that the long noise part lowers too much the 
-        % estimate, we only consider samples with relatively high power.
-        % the 75th percentile divides the samples as follow:
-        % - the 75% has power lower than the threshold;
-        % - the 25% has power higher than the threshold.
-        % NOTE! TODO! adjust the percentile based on the Duty Cycle set.
-        powerThreshold = prctile(slotSamplePower,75);
-        % Select the samples probably belonging to the burst.
-        activeSamples = slotSamplePower >= powerThreshold; % array of: 1/0
-        % Safety check.
-        % Normally activeSamples contains at least 25% of samples.
-        % If for some unforseen reasons no sample is selected, we use the whole 
-        % slot to calculate the average.
-        if any(activeSamples) % if at least there is a: 1 in the array --> True
-            measuredCoarsePower = mean( ...
-                slotSamplePower(activeSamples));
-        else
-            measuredCoarsePower = mean(slotSamplePower);
-        end
-        % Calculate the required gain to obtain the objective power.
-        % Remember: power is the square of the amplitude --> sqrt()
-        % If:
-        % P_out = gain^2 * P_in
-        % Then:
-        % gain = sqrt(P_out / P_in)
-        coarseGain = sqrt( ...
-            coarseTargetPower / ...
-            max(measuredCoarsePower,1e-12));
-        % Limit the gain to the allowed interval.
-        coarseGain = min( ...
-            max(coarseGain,coarseMinGain), ...
-            coarseMaxGain);
-        % Apply the same gain to the whole slot.
-        rxSlotBaseband = coarseGain * rxSlotBasebandRaw; % so now we have 
-        % tried to set the average power of the "rxSlotBaseband" to the 
-        % "coarseTargetPower" that is adimensional, is just a MATLAB scale,
-        % not anymore in Watt or dB as we did in the channel modeling.
-    
-       % 2.2. SIMPLE ADC MODEL
-        adcNumBits = 10; % maximum number of available bits to represent values
-        adcFullScale = 1; % full scale, hence range: [-1;+1], for clipping
-        % ADC maximum positive integer code.
-        adcMaxCode = 2^(adcNumBits-1) - 1; % maximum representable number of 
-        % ADC, in order to be symmetric to 0 --> -511,..,0,...,+511 (total 1023
-        % not 1024).
-        % Quantization step. distance between two consecutive quantized levels
-        adcStep = adcFullScale / adcMaxCode;    
-        % Separate I and Q components.
-        rxADCReal = real(rxSlotBaseband);
-        rxADCImag = imag(rxSlotBaseband);    
-        % Input clipping. [-1;+1], very clever with only one row of code
-        rxADCReal = min(max(rxADCReal,-adcFullScale),adcFullScale);
-        rxADCImag = min(max(rxADCImag,-adcFullScale),adcFullScale);    
-        % Uniform quantization. Uniform since the quantization step is equal.
-        % how many quantization steps corresponds the input value, round them
-        % to the nearest integer, then go back to the normalized value
-        rxADCReal = adcStep * round(rxADCReal/adcStep);
-        rxADCImag = adcStep * round(rxADCImag/adcStep);    
-        % Complex ADC output. after clipping and quantization
-        rxSlotBasebandADC = rxADCReal + 1j*rxADCImag;   
-    %}
-    
-    % NOW!
+    % - 3.2. ADC (CLIPPING + QUANTIZATION) 
+    % - 3.3. DIGITAL AGC 
+        % AGC DIG is required in order to finalize the RF AGC, over the
+        % precise found synchronization symbols.
+        % DIG AGC must be implemented once we have understood which samples
+        % belong to the burst, the timing must be known!
     [rxSlotBasebandADC, agcState] = agc_model(rxSlotBasebandRaw, Fs, ...
-                                                                agcState);
-    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
+                                                                agcState);    
 
-    % 3. RRC FILTER WITHOUT DECIMATION
+    % 4. RRC FILTER WITHOUT DECIMATION
     % The exit still keeps the #samplesPerSymbol samples per symbol
-%NOW!    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
+    rxSlotMatched = rxRRCsync(rxSlotBasebandADC);
     % for the blanking mask slot: since the RRC filter introduces a delay 
     % of filterSpan/2​⋅samplesPerSymbol we must delay also the blanking mask
     % slot when we correlate the candidate so to find the proper instants
     % blanked, so keeping into account the tails for the slot!
     rxRRCGroupDelaySamples = filterSpan * samplesPerSymbol / 2;
 
-    % 4. CORRELATION METRIC CALCULUS + BLANKING COMPENSATION 
+    % 5. CORRELATION METRIC CALCULUS + BLANKING COMPENSATION 
     % For each possible sample q, we take:
     % q,
     % q + samplesPerSymbol,
@@ -905,7 +839,7 @@ for k = 1:numBursts
         end
     end
 
-    % 5. LOOK FOR THE BEST CORRELATION CANDIDATE, MAXIMUM NORMALIZED SCORE
+    % 6. LOOK FOR THE BEST CORRELATION CANDIDATE, MAXIMUM NORMALIZED SCORE
     % Since every candidate has its own blanking-compensated threshold,
     % compare candidates through the normalized detection score:
     %       detectionScore(q) = syncMetric(q) / threshold(q)
@@ -928,7 +862,7 @@ for k = 1:numBursts
     bestThreshold = syncThresholdCandidate(bestCandidateIdx);
     bestNumBlanked = numBlankedSyncSymbols(bestCandidateIdx);    
 
-    % 6. DETECTION DECISION - CHANNEL ERASURE
+    % 7. DETECTION DECISION - CHANNEL ERASURE
     if bestScore < 1
         warning( ...
             ['Burst %d not detected:\n' ...
@@ -950,11 +884,11 @@ for k = 1:numBursts
     % position of the first sync symbol in the output of the adapted filter
     firstSyncSample = firstCandidate + bestCandidateIdx - 1;
 
-    % 7. FIND WHERE THE CP START
+    % 8. FIND WHERE THE CP START
     % The preamble is the first element after the CP
     firstCPSample = firstSyncSample - cpLength * samplesPerSymbol;
 
-    % 8. EXTRACTION OF THE SYMBOLS OF THE BURST
+    % 9. EXTRACTION OF THE SYMBOLS OF THE BURST
     % now we know both:
     %   - temporal position;
     %   - correct sampling phase.
@@ -976,40 +910,14 @@ for k = 1:numBursts
     % is not erased
     burstDetected(k) = true;
 
-    rxBurstSymbols = rxSlotMatched(burstSampleIndices);
+    rxBurstSymbols = rxSlotMatched(burstSampleIndices);    
     
-    % NOW!
-    %{ 
-       % 8.1. SIMPLE FINE AGC 
-        % AGC Fine is required in order to finalize the coarse AGC, over the
-        % precise found synchronization symbols.
-        % Fine AGC must be implemented once we have understood which samples
-        % belong to the burst, the timing must be known!
-        % Extract the pilots received.
-        receivedFinePilotSymbols = rxBurstSymbols(carrierPilotIndicesInBurst);
-        % Average power of the received pilots.
-        measuredFinePilotPower = mean(abs(receivedFinePilotSymbols).^2);
-        % Average power of the transmitted pilots.
-        % for a normal 8-PSK modulation, should be around 1.
-        % In any case it is better to directly calculate it.
-        targetFinePilotPower = mean(abs(knownCarrierPilotSymbols).^2);
-        % Calculate the fine gain.
-        fineGain = sqrt( ...
-            targetFinePilotPower / ...
-            max(measuredFinePilotPower,1e-12));
-        % Limit the correction
-        fineGain = min( ...
-            max(fineGain,fineMinGain), ...
-            fineMaxGain);
-        % apply the same gain to the whole burst.
-        rxBurstSymbols = fineGain * rxBurstSymbols;
-    %}
-           % 8.2. FEED-FORWARD CARRIER SYNCHRONIZATION (ACQUISITION)
-            % 8.2.1. EXTRACT THE KNOWN CARRIER PILOTS
+           % 9.1. FEED-FORWARD CARRIER SYNCHRONIZATION (ACQUISITION)
+            % 9.1.1. EXTRACT THE KNOWN CARRIER PILOTS
             receivedCarrierPilotSymbols = ... % take only the known pilots!
                 rxBurstSymbols(carrierPilotIndicesInBurst);
             
-            % 8.2.2. REMOVE THE KNOWN PILOT MODULATION
+            % 9.1.2. REMOVE THE KNOWN PILOT MODULATION
             % keep in mind the error we must correct: ϕ(t) = ϕ0 + 2πΔft
             % If:
             % receivedPilot(m) ≈ knownPilot(m) * exp(j*(2πΔft+ϕ0​))
@@ -1029,14 +937,14 @@ for k = 1:numBursts
             % pilots are long, CFO generates a slope enough evident, timing is
             % accurate, SNR is high, channel is constant through the burst
             
-            % 8.2.3. MEASURE AND UNWRAP THE PILOT PHASE
+            % 9.1.3. MEASURE AND UNWRAP THE PILOT PHASE
             wrappedPilotPhase = angle(carrierPilotProducts);
             % angle() returns values between -pi and +pi.
             % unwrap() removes artificial jumps of approximately 2*pi, converting
             % the phase evolution into an approximately continuous line.
             unwrappedPilotPhase = unwrap(wrappedPilotPhase);
             
-            % 8.2.4. ESTIMATE PHASE INTERCEPT AND PHASE SLOPE
+            % 9.1.4. ESTIMATE PHASE INTERCEPT AND PHASE SLOPE
             % The first known pilot has relative symbol index zero.
             carrierPilotRelativeIndex = (0:numCarrierPilotSymbols-1).';
             % Linear least-squares fit:
@@ -1057,7 +965,7 @@ for k = 1:numBursts
             % estimatedPhaseSlope_radPerSymbol * carrierPilotRelativeIndex ...
             % + estimatedPhaseIntercept_rad
         
-            % 8.2.5. CONVERT PHASE SLOPE TO CFO
+            % 9.1.5. CONVERT PHASE SLOPE TO CFO
             % phase_variation_per_symbol = [2π * ​Δf] / Symbol_Rate
             % thus: Δf = [phase_variation_per_symbol * Symbol_Rate] / 2*pi​
             estimatedCarrierFrequencyOffset_Hz(k) = ...
@@ -1066,7 +974,7 @@ for k = 1:numBursts
             estimatedCarrierPhaseOffset_rad(k) = ...
                 angle(exp(1j*estimatedPhaseIntercept_rad));
             
-            % 8.2.6. CORRECT CP and useful burst symbols
+            % 9.1.6. CORRECT CP and useful burst symbols
             % Symbol index relative to the first synchronization/pilot symbol:
             % CP symbols: -cpLength, ..., -1
             % First synchronization: 0
