@@ -551,7 +551,7 @@ thermalNoiseChannel = comm.ThermalNoise( ...
 rxSignalAtAntenna = thermalNoiseChannel(rxSignalWithInterference);
 
 % check 10*log10(mean(abs(rxSignalAtAntenna).^2))
-%% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but 
+%% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but
 % Complementary)
 % Convert gain in dB into an amplitude multiplier.
 % so this block performs: LNA, mixer, IF amplifier, baseband amplifier
@@ -588,7 +588,7 @@ rxSignal = rxSignal .* blankingMask; % element-wise multiplication with 1/0
 
 %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
 %% Realistic Burst Time Synchronization Using Preamble Correlation
-%% Coarse AGC --> ADC --> Fine AGC
+%% Finite States Machine: RF AGC --> ADC --> DIGITAL AGC
 %% Carrier Synchronization (Frequency Synch. and Phase Synch.)
 % The Rx knows:
 %   - "Slot" duration
@@ -636,29 +636,8 @@ minUsableSyncFraction = 0.33; % Blanking Compensation variable threshold
 % which we can still try to recover the burst
 % (usable_sync_symbols/total_sync_symbols).
 
-% COARSE and FINE AGC configuration parameters (2.1. and 8.1.)
-% Approximate desired power at the output of the Coarse AGC.
-% A power equal to 0.25 correspondes to an RMS amplitude of sqrt(0.25)=0.5
-% We do not use power=1, so to leave a certain margin to an eventual
-% saturation of RX.
-% coaorseGain adds a variable analog gain added to the fixed 80 dB frontend
-coarseTargetPower = 0.25; % adimensional as a MATLAB unit (nomore Watt/dB)
-% NOTE! it must be compliant to the variable: "adcFullScale" of the ADC,
-% for the clipping, in order to avoid clipping complex samples.
-% Coarse gain limits.
-% the Coarse AGC can attenuate up to a factor of: 0.05
-% or amplify up to a factor of: 30.
-coarseMinGain = 0.05;
-coarseMaxGain = 30;
-% Fine gain limits.
-% fineGain is a digital gain added after ADC conversion
-% The Fine AGC has to perform only a small final correction, because the
-% main part has been already corrected by the Coarse AGC.
-fineMinGain = 0.5;
-fineMaxGain = 2;
-
 % Carrier Synchronization (Frequency and Phase  Synchronization) Parameters
-% Configiguration (used also for Fine AGC)
+% Configiguration
 % We use both:
 %   - synchronization-reference symbols;
 %   - phase-reference symbols.
@@ -713,7 +692,7 @@ for k = 1:numBursts
     tSlot = globalSampleIndices / Fs; % Fs = [samples/second], do the math
     fRel = relativeCarrierFrequencies(frequencyChannels(k)); % FH scheme
     % Downconversion bring the entire time slot back to baseband
-    % raw because we still have to apply Coarse AGC
+    % raw because we still have to apply AGC
     rxSlotBasebandRaw = rxSlotUpconverted .* exp(-1j * 2*pi * fRel *tSlot);
     
     % 3. FINITE STATE MACHINES, retrieves the external auxiliary function: 

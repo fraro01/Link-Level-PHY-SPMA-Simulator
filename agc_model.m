@@ -14,6 +14,8 @@
 %                      AGC RF - ADC - AGC DIG                             %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+% AGC Gain adds a variable analog gain added to the fixed 90 dB front-end
+
 % takes in input the current time slot analyzed "rxIn" for the current 'k' 
 % burst under alaysis inside the main for loop of the RX
 function [rxOut, state] = agc_model(rxIn, Fs, state)
@@ -35,7 +37,8 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
     % how often the AGC controller observes the time slot, estimates the 
     % level, calculates the error, updates the gain. it's the 
     % discretization of the AGC clock
-    updatePeriod = 1e-12; % seconds. AGC update period
+    updatePeriod = 1e-12; % seconds. AGC update period. NOTE! you should  
+    % not go below: 1/Fs s, in the next code line there is the reason why! 
     % Number of samples contained in one AGC update window
     samplesPerUpdate = max(1, round(updatePeriod * Fs));
 
