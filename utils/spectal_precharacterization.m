@@ -16,7 +16,6 @@ clc;
 %close all;
 
 
-
 %% Symbol rate for a nominal 13 MHz channel
 %{%}
 % rolloff = 1; % [0;1]
