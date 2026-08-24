@@ -2,28 +2,50 @@
 %                           TRANSMITTER                                   %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
-    symbolsPerBurstWithCP, extraSymbols, samplesPerSymbol, symbolRate, ...
-    fMax, fCenter, txSCFDEBursts, burstTxTime, slotDuration, ...
-    syncReference, phaseReference, bitsPerSymbol, modulatedBursts, ...
-    rolloff, filterSpan, cpLength, frequencyChannels, ...
-    relativeCarrierFrequencies, symbolsPerBurst, M, numPadBits8PSK, ...
-    numEncodedBits, encodedPacket, interleaverIndices, packet, ...
-    dutyCycle] = transmitter()
-
+function [packet, ... % original packet with random bits
+          encodedPacket, ... % encoded packet above
+          numEncodedBits,  ... % number of encoded bits due to Turbo Coding
+          interleaverIndices, ... % for turbo decoder
+          M, ... % modulation type
+          bitsPerSymbol, ... 
+          numPadBits8PSK, ... % padding bits for 8PSK
+          symbolsPerBurst, ...
+          symbolsPerBurstWithCP, ...
+          modulatedBursts, ... % after 8PSK
+          txSCFDEBursts, ... % after SCFDE
+          frequencyChannels,...
+          fCenter, ...
+          relativeCarrierFrequencies, ... % equivalent baseband
+          carrierForBurst, ... 
+          burstTxTime, ...
+          slotDuration, ...
+          startTimes, ... % per burst
+          txSignal ... % FINAL TRANSMITTED SIGNAL
+         ] = transmitter(...
+          packetLength, ...
+          dutyCycle, ... % percentage: TX/RX
+          numBursts, ... % how many bursts a packet is divided into
+          syncReference, ... % fixed preamble above
+          phaseReference, ... % fixed preamble above
+          fMin, ... % lower boundary 
+          fMax, ... % upper boundary 
+          numFrequencyChannels, ... 
+          rolloff, ... % RRC configuration
+          filterSpan, ... % RRC configuration
+          symbolRate, ...
+          samplesPerSymbol, ...
+          Fs, ... % sampling frequency
+          cpLength) % Cyclic Prefix for SCFDE
+ 
     %% Originate the Packet
-    % Set the length of the packet in bits
-    packetLength = 1331;
     % Generate random bits (0 or 1)
     packet = randi([0 1], packetLength, 1); %column vector not row for applying 
-    % turbo coding
-    
+    % turbo coding    
     
     %% Turbo Coding
     % TODO! add trellis and numeiterations
-    % NOTE! study the turbo coding functionings
     % Constituent convolutional code: rate 1/3
-    trellis = poly2trellis(4, [13 15 17], 13);
+    % trellis = poly2trellis(4, [13 15 17], 13);
     % Interleaver turbo
     interleaverIndices = randperm(packetLength);
     % Turbo encoder rate 1/3, (it is the default)
@@ -37,7 +59,6 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     %% Divide the Original Packet into Bursts
     % ASSUMPTION! we assume the number of bits per packet fixed, hence packet
     % length fixed
-    numBursts = 28;
     % length of the turbo encoded packet
     numEncodedBits = length(encodedPacket);
     % "integer superior part" taken --> exceeding bits --> padding bits
@@ -51,13 +72,9 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     
     
     %% 48 sync reference bits, 48 phase reference bits, 5 indexing bits
-    % the sync and the reference bits remain fixed for all bursts
-    rng(1); % fixed seed to keep fixed only the two random variables below
-    syncReference  = randi([0 1], 48, 1);   % 48 synchronization bits
-    phaseReference = randi([0 1], 48, 1);   % 48 phase reference bits
-    rng('shuffle'); % come back to random sequence for all rest of the script
+    
     % integer superior part of the log2 --> add minimum number of indexing bits
-    numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
+    % numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
     % matrix of zeros
     framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
                             length(phaseReference), ... % + numIndexBits, ... 
@@ -107,9 +124,7 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     end
     
     
-    %% SC-FDE Modulation, Cyclic Prefix 
-    cpLength = 16; % TODO! Must exceed the maximum channel delay in symbols
-    % adding the space for the cyclic prefix
+    %% SC-FDE Modulation, Cyclic Prefix    
     txSCFDEBursts = zeros(symbolsPerBurst + cpLength, numBursts);
     for k = 1:numBursts
         % already 8-PSK modulated bursts
@@ -130,16 +145,10 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     % symbol rate = 13 MHz; maximum 17 MHz, check if the one derived is
     % compliant to these numbers.
     % parameters
-    numFrequencyChannels = 4;
     symbolsPerBurstWithCP = size(txSCFDEBursts,1);
-    dutyCycle = 0.25;
-    fMin = 1435e6;
-    fMax = 1518e6;
+    
     % Configuration of Root Raised Cosine TX Filter, we configure the "rolloff"
     % now, because is used to calculate the Symbol Rate from the formula below
-    rolloff = 0.35; % how much extra band we use for the RRC filter
-    % TLC formula for Symbol Rate: symbolRate = channelBandwidth/(1+rolloff)
-    symbolRate = ((fMax - fMin)/numFrequencyChannels)/(1 + rolloff);
     % timing
     burstTxTime = symbolsPerBurstWithCP / symbolRate;     % seconds
     slotDuration = burstTxTime / dutyCycle;               % seconds
@@ -158,8 +167,7 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     % maxOffset = slotDuration - burstTxTime;
     % The below definition of maxOffset better cope with the tails introduced 
     % by the Pulse Shaping Filters.
-    filterSpan = 12; % RRC filter duration in symbols NOTE! the longer it lasts
-    % over time, the sharper it is over the frequencies. 
+     
     % I have defined it here, even though the RRC is implemented in the next
     % block. But it is essential to define it here in order to prevent the
     % transmission of a burst to create tails that exceed their own allocated 
@@ -192,22 +200,19 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     % (relativeCarrierFrequencies(4) - relativeCarrierFrequencies(3))]
     % Atually, with RRC the one-sided band of a single channel is: 
     % Bsingle = symbolRate/2 * (1 + rolloff) --> hence fmax_occupied is less.
-    % TODO! in any case adjust the samplesPerSymbol accordingly.
+    % in any case make sure the samplesPerSymbol is set AT LEAST accordingly
     % NOTE! see: https://en.wikipedia.org/wiki/Raised-cosine_filter for time
     % and frequency domain plots, for a better understanding of RRC. RRC makes
     % symbols extremely overlap over the time, but thanks to the first Nyquist
     % criterion for pulse shaping filters, exactly in the sampling points the
     % interferers are equal to zero.
-    samplesPerSymbol = 8; % number of samples per symbol
+    
     % sample rate --> how much finely we represent the waveform over the time.
     % symbol rate --> how quick the info changes.
-    Fs = symbolRate * samplesPerSymbol; % sampling frequency, since we are 
-    % constructing the signal from the symbol to the the continuous time domain 
-    % we need more samples to represent one symbol.
+    
     % NOTE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
     % IF we transmit simultaneously multiple bursts per time slot we could
-    % experience ACI, since our channel spacing is roughly 13.83 MHz --> set
-    % rolloff accordingly <-- TODO!
+    % experience ACI, since our channel spacing is roughly 13.83 MHz
     % filterSpan = 12; filter duration in symbols, NOTE! the longer it lasts
     % over time, the sharper it is over the frequencies. I have commented it
     % since it has been already defined above for the TF-Hopping, so that a
@@ -220,9 +225,6 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
     % outputs per symbol the RRC
     totalTime = max(endTimes); % final time for transmitting the whole packet 
     % (last burst)
-    symbolsPerBurstWithCP = size(txSCFDEBursts,1);
-    extraSymbols = filterSpan; % Extra zero symbols appended to flush the TX/RX 
-    % pulse-shaping filters.
     tailSamples = filterSpan * samplesPerSymbol; % tail extention in samples 
     numSamplesTotal = ceil(totalTime * Fs) + tailSamples + 1; % +1 for safety 
     % reasons
@@ -236,8 +238,9 @@ function [txSignal, numBursts, carrierForBurst, startTimes, Fs, ...
         reset(txRRC); % clean the filter memory per each burst
         burstSymbols = txSCFDEBursts(:,k); % from where we sample
         % Add zeros to flush the TX/RX filter memory response tail for last
-        % symbol
-        burstSymbolsPadded = [burstSymbols; zeros(extraSymbols,1)];
+        % symbol. Extra zero symbols appended to flush the TX/RX 
+        % pulse-shaping filters.
+        burstSymbolsPadded = [burstSymbols; zeros(filterSpan,1)];     
         % Pulse shaping
         shapedBurst = txRRC(burstSymbolsPadded);
         % startTimes(k) indicates the beginning of the shaped TX waveform,

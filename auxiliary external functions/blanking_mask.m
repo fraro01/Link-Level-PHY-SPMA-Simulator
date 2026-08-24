@@ -19,31 +19,38 @@
 % of the RRC filter, so to keep blanking respecting the 25% Duty Cycle.
 
 function blankingMask = blanking_mask(rxSignal, fractionTxBursts, ...
-                        fractionBurstOccupiedTime, slotDuration, Fs)
-% 1 --> receiver available
-% 0 --> local transceiver is transmitting, hence: receiver blanked
-blankingMask = ones(size(rxSignal)); % the length must be the same of TX!
-% Duration during which RX is considered blanked.
-rxTxBlankingDuration = fractionBurstOccupiedTime;
-% Independent TX timing of the local transceiver
-rxTxStartTimes = zeros(fractionTxBursts,1);
-rxTxEndTimes   = zeros(fractionTxBursts,1);
-for k = 1:fractionTxBursts
-    slotStartTime = (k-1)*slotDuration;
-    % Maximum start offset that keeps the TX pulse inside the slot
-    maxRxTxOffset = slotDuration - rxTxBlankingDuration;
-    rxTxOffset = rand() * maxRxTxOffset;
-    % in the time domain
-    rxTxStartTimes(k) = slotStartTime + rxTxOffset;
-    rxTxEndTimes(k)   = rxTxStartTimes(k) + rxTxBlankingDuration;
-    % sample conversion
-    startSampleBlanking = floor(rxTxStartTimes(k)*Fs) + 1;
-    endSampleBlanking   = ceil(rxTxEndTimes(k)*Fs);
-    % constraints to keep them inside the boundaries
-    startSampleBlanking = max(startSampleBlanking,1);
-    endSampleBlanking   = min(endSampleBlanking,length(blankingMask));
-    % the TX time is set to 0
-    blankingMask(startSampleBlanking:endSampleBlanking) = 0;
+                        fractionBurstOccupiedTime, slotDuration, Fs, numBursts)
+    % 1 --> receiver available
+    % 0 --> local transceiver is transmitting, hence: receiver blanked
+    blankingMask = ones(size(rxSignal)); % the length must be the same of TX!
+    % Duration during which RX is considered blanked.
+    rxTxBlankingDuration = fractionBurstOccupiedTime;
+    % Independent TX timing of the local transceiver
+    rxTxStartTimes = zeros(fractionTxBursts,1);
+    rxTxEndTimes   = zeros(fractionTxBursts,1);
+    
+    % indices put in random permutation, that correspondes to the bursts the RX
+    % is transmitting in TxRxN
+    arrayIndicesTXBursts = randperm(numBursts, fractionTxBursts); % #'fractionTxBursts' 
+    % values all different between 1 and #numBursts
+    
+    for k = arrayIndicesTXBursts
+        slotStartTime = (k-1)*slotDuration;
+        % Maximum start offset that keeps the TX pulse inside the slot
+        maxRxTxOffset = slotDuration - rxTxBlankingDuration;
+        rxTxOffset = rand() * maxRxTxOffset;
+        % in the time domain
+        rxTxStartTimes(k) = slotStartTime + rxTxOffset;
+        rxTxEndTimes(k)   = rxTxStartTimes(k) + rxTxBlankingDuration;
+        % sample conversion
+        startSampleBlanking = floor(rxTxStartTimes(k)*Fs) + 1;
+        endSampleBlanking   = ceil(rxTxEndTimes(k)*Fs);
+        % constraints to keep them inside the boundaries
+        startSampleBlanking = max(startSampleBlanking,1);
+        endSampleBlanking   = min(endSampleBlanking,length(blankingMask));
+        % the TX time is set to 0
+        blankingMask(startSampleBlanking:endSampleBlanking) = 0;
+    end
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

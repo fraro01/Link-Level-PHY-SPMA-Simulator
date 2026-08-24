@@ -125,7 +125,6 @@ function interferer_waveform = interferers(numInterferers, txSCFDEBursts)
         % (relativeCarrierFrequencies(4) - relativeCarrierFrequencies(3))]
         % Atually, with RRC the one-sided band of a single channel is: 
         % Bsingle = symbolRate/2 * (1 + rolloff) --> hence fmax_occupied is less.
-        % TODO! in any case adjust the samplesPerSymbol accordingly.
         % NOTE! see: https://en.wikipedia.org/wiki/Raised-cosine_filter for time
         % and frequency domain plots, for a better understanding of RRC. RRC makes
         % symbols extremely overlap over the time, but thanks to the first Nyquist
@@ -139,8 +138,7 @@ function interferer_waveform = interferers(numInterferers, txSCFDEBursts)
         % we need more samples to represent one symbol.
         % NOTE! each RRC burst has null-to-null bandwidth: symbolRate*(1+rolloff)
         % IF we transmit simultaneously multiple bursts per time slot we could
-        % experience ACI, since our channel spacing is roughly 13.83 MHz --> set
-        % rolloff accordingly <-- TODO!
+        % experience ACI, since our channel spacing is roughly 13.83 MHz
         % filterSpan = 12; filter duration in symbols, NOTE! the longer it lasts
         % over time, the sharper it is over the frequencies. I have commented it
         % since it has been already defined above for the TF-Hopping, so that a
