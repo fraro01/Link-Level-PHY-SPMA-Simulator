@@ -51,7 +51,7 @@ numInterferers = 0; % set the number of interferer nodes, NOTE! it
 % BLANKING COMPENSATION
 % use percentage with respect to the original value to tweak the number of 
 % transmitted bursts and the respective occupied time
-fractionTxBursts = round(numBursts * 1.0); % number of TX bursts while 
+fractionTxBursts = round(numBursts * 0.0); % number of TX bursts while 
 % Receiving, the number of TX bursts will be in any case smaller than 
 % 'numBursts',
 ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be 
@@ -59,17 +59,23 @@ ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-packets = 30;
-% for storing values
-finalEncodedPacketErroredBits = 0;
-finalOriginalPacketErroredBits = 0;
-lostBurst = 0;
-errRMS_runs = zeros(1, packets);
-errMax_runs = zeros(1, packets);
-packetCompletelyReconstructed = false(1, packets);
+metrics.packets = 33; % simulation cycles
+% for storing values we use a MATLAB 'Structure'
+metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
+% packets
+metrics.finalOriginalPacketErroredBits = 0; % errored bits in the original 
+% packets
+metrics.lostBurst = 0; % number of bursts lost
+metrics.packetCompletelyReconstructed = false(1, metrics.packets); % with 0 
+% errored bits
+metrics.errRMS_runs = zeros(1, metrics.packets); 
+metrics.errMax_runs = zeros(1, metrics.packets);
+metrics.SINR_runs = zeros(1, metrics.packets); % SINR linear
+metrics.EbN0_linear_runs = zeros(1, metrics.packets); % E_b/N_0 linear
+metrics.EVM_runs = zeros(numBursts, metrics.packets); % EVM percentage
 
 %% SIMULATION LOOP
-for i = 1:packets
+for i = 1:metrics.packets
 
     %% TRANSMITTER
     [packet, ... % original packet with random bits
@@ -112,6 +118,10 @@ for i = 1:packets
     fractionBurstOccupiedTime = ex_fractionBurstOccupiedTime * burstTxTime;
     [blankingMask, ... % blanking mask TxRxN
      rxSignal, ... % FINAL SIGNAL IN RX
+     rxSignalImpaired, ...
+     rxSignalAtAntenna, ...
+     rxSignalWithInterference, ...
+     interferer_waveform ...
     ] = channel.channel(...
      txSignal, ... % signal in input
      numBursts, ... 
@@ -136,6 +146,8 @@ for i = 1:packets
      totalErroredBitsFromEncodedPacket, ... 
      totalErroredBitsFromOriginalPacket, ...
      burstDetected, ...
+     numPilotSymbols, ...
+     rxEqualizedBursts ...
     ] = receiver.receiver( ...
         rxSignal, ... % input signal
         blankingMask, ...
@@ -162,34 +174,82 @@ for i = 1:packets
         samplesPerSymbol, ...
         Fs, ...    
         slotDuration);
-
-    %% ACCUMULATE METRICS
-    if totalErroredBitsFromOriginalPacket == 0
-        packetCompletelyReconstructed(i) = true;
-    end
-    errRMS_runs(i) = errRMS;
-    errMax_runs(i) = errMax;
-    finalEncodedPacketErroredBits = finalEncodedPacketErroredBits + totalErroredBitsFromEncodedPacket;
-    finalOriginalPacketErroredBits = finalOriginalPacketErroredBits + totalErroredBitsFromOriginalPacket;
-    lostBurst = lostBurst + sum(~burstDetected);
     
+    %% COMPUTE METRICS
+    [sinr_linear, ... % SINR linear
+     EbN0_linear, ... % E_b/N_0 linear
+     evmPerBurst_percent ... % EVM percentage
+    ] = CalculateMetrics.calculate_metrics( ... % static Class
+        Fs, ...
+        rxSignalImpaired, ...
+        rxSignalAtAntenna, ...
+        rxSignalWithInterference, ...
+        interferer_waveform, ...
+        packetLength, ...
+        numBursts, ...
+        burstDetected, ...
+        modulatedBursts, ...
+        numPilotSymbols, ...
+        rxEqualizedBursts);
+
+    %% UPDATE METRICS per Cycle
+    if totalErroredBitsFromOriginalPacket == 0
+        metrics.packetCompletelyReconstructed(i) = true;
+    end    
+    metrics.finalEncodedPacketErroredBits = ...
+        metrics.finalEncodedPacketErroredBits + ...
+            totalErroredBitsFromEncodedPacket;
+    metrics.finalOriginalPacketErroredBits = ...
+        metrics.finalOriginalPacketErroredBits + ...
+            totalErroredBitsFromOriginalPacket;
+    metrics.lostBurst = metrics.lostBurst + sum(~burstDetected);
+    metrics.errRMS_runs(i) = errRMS;
+    metrics.errMax_runs(i) = errMax;
+    metrics.SINR_runs(i) = sinr_linear;
+    metrics.EbN0_linear_runs(i) = EbN0_linear;
+    metrics.EVM_runs(:,i) = evmPerBurst_percent;
+   
 end
 
-fprintf('\n--- REPORT ---\n'); % title
-fprintf('Max error over %d runs; after synchronizations, before equalization: %.3e\n', packets, max(errMax_runs));
-fprintf('Mean RMS error over %d runs; after synchronizations, before equalization: %.3e\n', packets, mean(errRMS_runs));
-fprintf('STD RMS error over %d runs; after synchronizations, before equalization: %.3e\n', packets, std(errRMS_runs));
-fprintf('---------------------\n'); % div
+% MATLAB Structure, for displaying values, in the Report, using the
+% function 'final_values' from the Static Class 'CalculateMetrics' acting 
+% as a related-functions collector
+metrics_calculated = CalculateMetrics.final_values(metrics, ...
+                                numEncodedBits, packetLength, numBursts);
+
+%% PRINT REPORT 
+fprintf('\n---------------------- REPORT ---------------------\n'); % title
+%{
+fprintf(['Max error over %d runs; after synchronizations, before ' ...
+    'equalization: %.3e\n'], metrics.packets, metrics_calculated.errMax);
+fprintf(['Mean RMS error over %d runs; after synchronizations, before ' ...
+    ' equalization: %.3e\n'], metrics.packets, metrics_calculated.errRMS);
+fprintf(['STD RMS error over %d runs; after synchronizations, before ' ...
+' equalization: %.3e\n'], metrics.packets, metrics_calculated.errSTD_RMS);
+%}
+fprintf('------------------------------------------\n'); % div
 fprintf('Hard errors inferred from LLR sign: %d\n', ...
-        finalEncodedPacketErroredBits);
+                            metrics_calculated.finalEncodedBitErrors);
 fprintf('Total final errored bits from original packets: %d\n', ...
-        finalOriginalPacketErroredBits);
-fprintf('---------------------\n'); % div
-fprintf('Total bursts erased: %d\n', lostBurst);
-fprintf('Total packets completely reconstructed: %d\n', sum(packetCompletelyReconstructed));
-fprintf('---------------------\n'); % div
-fprintf('Bit Error Rate before decoding %.2f%%\n', 100 * (finalEncodedPacketErroredBits/ (packets*numEncodedBits)));
-fprintf('Bit Error Rate after decoding %.2f%%\n', 100 * (finalOriginalPacketErroredBits / (packets*packetLength)));
-fprintf('Burst Loss Rate %.2f%%\n', 100 * (lostBurst / (packets * numBursts)));
-fprintf('Packet Error Rate %.2f%%\n', 100 * (sum(~packetCompletelyReconstructed)/(packets)));
-fprintf('------------------------------------------\n'); % report end
+                            metrics_calculated.finalOriginalBitErrors);
+fprintf('------------------------------------------\n'); % div
+fprintf('Signal-to-Interference-plus-Noise Ratio: %.2f dB\n', ...
+                            metrics_calculated.SINR);
+fprintf('Payload Error Vector Magnitude percentage: %.2f%%\n', ...
+                            metrics_calculated.EVM_pct);
+fprintf('Payload Error Vector Magnitude decibels: %.2f dB\n', ...
+                            metrics_calculated.EVM_dB);
+fprintf('E_b/N_0 linear: %.2f\n',  metrics_calculated.EbN0_linear);
+fprintf('E_b/N_0 decibels: %.2f dB\n',  metrics_calculated.EbN0_dB);
+fprintf('------------------------------------------\n'); % div
+fprintf('Total bursts erased: %d\n', metrics_calculated.lostBurst);
+fprintf('Total packets completely reconstructed: %d\n', ...
+                            metrics_calculated.ReconstructedPacket);
+fprintf('------------------------------------------\n'); % div
+fprintf('Bit Error Rate before decoding %.2f%%\n', ...
+                            metrics_calculated.BER_before_dec);
+fprintf('Bit Error Rate after decoding %.2f%%\n', ...
+                            metrics_calculated.BER_after_dec);
+fprintf('Burst Loss Rate %.2f%%\n', metrics_calculated.BLR);
+fprintf('Packet Error Rate %.2f%%\n', metrics_calculated.PER);
+fprintf('------------------------------------------------\n'); % report end

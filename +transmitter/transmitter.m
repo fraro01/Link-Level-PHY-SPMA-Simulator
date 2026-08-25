@@ -153,7 +153,6 @@ function [packet, ... % original packet with random bits
     burstTxTime = symbolsPerBurstWithCP / symbolRate;     % seconds
     slotDuration = burstTxTime / dutyCycle;               % seconds
     % fundamental check of the logic: burstTxTime / slotDuration = dutyCycle
-    totalPacketTime = numBursts * slotDuration;           % seconds
     % Frequency channels
     channelBandwidth = (fMax - fMin) / numFrequencyChannels;
     carrierFrequencies = fMin + channelBandwidth/2 + ...
