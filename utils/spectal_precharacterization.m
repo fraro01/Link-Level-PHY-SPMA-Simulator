@@ -44,8 +44,9 @@ for k = 1:numBursts % iterate over all 28 bursts
     idealShapedBursts{k} = txRRCspectral(burstSymbols); % pulse shaping
 end
 % concatenate vertically the content
-txWaveformIdeal = vertcat(idealShapedBursts{:});
+% txWaveformIdeal = vertcat(idealShapedBursts{:});
 % NOTE! INTERESTING TO CHECK!
+txWaveformIdeal = txSignal;
 % txWaveformIdeal = interferer_waveform;
 % txWaveformIdeal = blankingMask;
 
@@ -205,7 +206,7 @@ title('Whole Baseband Waveform Envelope');
 xlim([timeAxis_us(1), timeAxis_us(end)]);
 
 %% Select one burst
-burstIndex = 1;
+burstIndex = 1; % take just the first burst as one burst for reference
 burstWaveform = idealShapedBursts{burstIndex};
 burstTime_us = ((0:length(burstWaveform)-1).' / Fs) * 1e6;
 
@@ -215,7 +216,7 @@ plot(burstTime_us, abs(burstWaveform), 'LineWidth', 1.1);
 grid on;
 xlabel('Time [\mus]');
 ylabel('Magnitude');
-title(sprintf('Baseband Waveform Envelope — Burst %d', burstIndex));
+title(sprintf('Baseband Waveform Envelope of a Burst'));
 xlim([burstTime_us(1), burstTime_us(end)]);
 
 %% Time-domain I/Q components of one burst
@@ -226,7 +227,7 @@ plot(burstTime_us, imag(burstWaveform), 'LineWidth', 1.0);
 grid on;
 xlabel('Time [\mus]');
 ylabel('Amplitude');
-title(sprintf('Baseband Waveform — Burst %d', burstIndex));
+title(sprintf('Burst Baseband Waveform'));
 legend('In-phase I', 'Quadrature Q', 'Location', 'best');
 xlim([burstTime_us(1), burstTime_us(end)]);
 hold off;

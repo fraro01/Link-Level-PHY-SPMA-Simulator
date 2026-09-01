@@ -60,9 +60,15 @@ classdef CalculateMetrics
                 end
                 % take the two measures        
                 referencePayload = ...
-                    modulatedBursts(numPilotSymbols+1:end,k); % reference
-                receivedPayload  = ...
-                    rxEqualizedBursts(numPilotSymbols+1:end,k); % estimate
+                    modulatedBursts(numPilotSymbols+1:end,k); % reference, 
+                % they are the symbols that directly exit from the 8PSK mod
+                % excluded the preamble, since it is the "dirtiest" part in
+                % reception, used for better estimating the following info
+                % bits
+                receivedPayload  = ...                    
+                    rxEqualizedBursts(numPilotSymbols+1:end,k); % estimated
+                % symbols, cleaned with equalization, right before the 8PSK
+                % demodulation.
                 % calculate the error
                 errorVector = receivedPayload - referencePayload;
                 % RMS 
