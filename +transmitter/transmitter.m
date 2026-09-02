@@ -233,12 +233,41 @@ function [packet, ... % original packet with random bits
     % Frequencies relative to bandwidth center
     relativeCarrierFrequencies = carrierFrequencies - fCenter;
     
+    %{
+    The Root Raised Cosine filter is a memory FIR filter because the 
+    response associated with each symbol spans multiple symbol intervals. 
+    Since each burst in the simulator is pulse-shaped independently, before 
+    each burst I reset the filter's internal state using reset (txRRC), 
+    preventing the previous burst from influencing the next. Furthermore,
+    after the last useful symbols, I add zero symbols to continue advancing 
+    the filter and allow the residual transient response to fully 
+    dissipate. These zeros do not represent transmitted information  
+    symbols, but serve exclusively to flush the filter's tail.
+
+    The precise shape of the initial transient (due to the start from the 
+    null state) depends on the first symbols of the burst, while that of 
+    the final transient depends on the last symbols. Since these sequences 
+    are generally different, the two tails will not be mathematically 
+    mirrored.
+
+    When thinking about RRC always differentiate between Macroscopic vision
+    --> burst; Microscopic vision --> symbols OR samples;
+    Filter_Length = filterSpan*samplesPerSymbol + 1; the '+1' represents
+    the center of the filter response.
+    %}
+
     for k = 1:numBursts
-        reset(txRRC); % clean the filter memory per each burst
+        reset(txRRC); % clean the filter memory per each burst, otherwise 
+        % MATLAB interprets two consecutive bursts as a continuous 
+        % sequence, and not being independent; since the final state of the
+        % first burst influences the the start of the second one.
+        % RESET resets the state before the start of the new burst.
         burstSymbols = txSCFDEBursts(:,k); % from where we sample
-        % Add zeros to flush the TX/RX filter memory response tail for last
-        % symbol. Extra zero symbols appended to flush the TX/RX 
-        % pulse-shaping filters.
+        % Append zero-valued symbols to flush the TX RRC filter state and
+        % preserve the complete pulse-shaping tail of the burst. Extra zero 
+        % symbols appended to flush the TX/RX pulse-shaping filters. In 
+        % order to copmletely exit from the filter the end of the current 
+        % burst.
         burstSymbolsPadded = [burstSymbols; zeros(filterSpan,1)];     
         % Pulse shaping
         shapedBurst = txRRC(burstSymbolsPadded);

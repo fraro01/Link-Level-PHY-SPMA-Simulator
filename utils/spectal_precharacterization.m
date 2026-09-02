@@ -1,4 +1,13 @@
 
+%{
+* ctrl + f --> TODO! for coding;
+* ctrl + f --> NOTE! something over which we must pay attention;
+* ctrl + f --> ASSUMPTION! when assumptions are introduced;
+*
+%}
+
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                    SPECTRAL PRE-CHARACTERIZATION                        %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -18,10 +27,11 @@ clc;
 
 %% Symbol rate for a nominal 13 MHz channel
 %{%}
-% rolloff = 1; % [0;1]
-% filterSpan = 15; % in symbols
+% rolloff = 0.35; % [0;1]
+% filterSpan = 10; % in symbols
 channelBandwidth = 13e6;
-symbolRate = channelBandwidth / (1 + rolloff);
+symbolRate = channelBandwidth / (1 + rolloff); % NOTE! this with filterSpan 
+% are the two things that slightly enlarge the variable: 'burstTxTime'
 Fs = symbolRate * samplesPerSymbol;
 
 
