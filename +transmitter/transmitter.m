@@ -35,8 +35,10 @@ function [packet, ... % original packet with random bits
           symbolRate, ...
           samplesPerSymbol, ...
           Fs, ... % sampling frequency
-          cpLength) % Cyclic Prefix for SCFDE
+          cpLength ... % Cyclic Prefix for SCFDE
+          )
  
+
     %% Originate the Packet
     % Generate random bits (0 or 1)
     packet = randi([0 1], packetLength, 1); %column vector not row for applying 
@@ -158,7 +160,6 @@ function [packet, ... % original packet with random bits
     carrierFrequencies = fMin + channelBandwidth/2 + ...
         (0:numFrequencyChannels-1)*channelBandwidth; % list comprehension (0:i)
     % Time-frequency hopping pattern
-    rng();   % if you want results reproducibility insert a number
     timeSlots = 1:numBursts; % vector column
     
     % Random offset inside each slot, without taking into account RRC tails in

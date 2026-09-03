@@ -237,8 +237,8 @@ function [blankingMask, ...
     % Impairments.
     % set the following Offset parameters according to the simulation
     % These are distinct from physical propagation Doppler.
-    trueCarrierPhaseOffset_rad = deg2rad(15); % the Phase offset introduced
-    trueCarrierFrequencyOffset_Hz = 1e3; % the CFO introduced in Hz
+    trueCarrierPhaseOffset_rad = deg2rad(1); % the Phase offset introduced
+    trueCarrierFrequencyOffset_Hz = 250; % the CFO introduced in Hz
     sampleIndex = (0:length(rxSignalFaded)-1).'; % we start from 0 --> -1
     timeAxis = sampleIndex / Fs; % in seconds
     % formula used below: ϕ(t) = ϕ0 + 2πΔft | CFO makes rotating continuously 

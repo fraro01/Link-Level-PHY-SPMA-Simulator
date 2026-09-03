@@ -27,7 +27,8 @@ numBursts = 28;
 rng(1); % fixed seed to keep fixed only the two random variables below
 syncReference  = randi([0 1], 48, 1);   % 48 synchronization bits
 phaseReference = randi([0 1], 48, 1);   % 48 phase reference bits
-rng('shuffle'); % come back to random sequence for all rest of the script
+rng(3); % set 'shuffle' to keep it random at each iteration, otherwise  
+% e.g.: 3 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
 fMax = 1518e6;
@@ -59,7 +60,7 @@ ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 33; % simulation cycles
+metrics.packets = 1; % simulation cycles
 % for storing values we use a MATLAB 'Structure'
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
@@ -112,7 +113,8 @@ for i = 1:metrics.packets
      symbolRate, ...
      samplesPerSymbol, ...
      Fs, ... % sampling frequency
-     cpLength); % Cyclic Prefix for SCFDE
+     cpLength ... % Cyclic Prefix for SCFDE
+     );
       
     %% CHANNEL
     % since we get 'burstTxTime' just from above

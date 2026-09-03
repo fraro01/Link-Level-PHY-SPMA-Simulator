@@ -56,9 +56,9 @@ end
 % concatenate vertically the content
 % txWaveformIdeal = vertcat(idealShapedBursts{:});
 % NOTE! INTERESTING TO CHECK!
-txWaveformIdeal = txSignal;
+% txWaveformIdeal = txSignal;
 % txWaveformIdeal = interferer_waveform;
-% txWaveformIdeal = blankingMask;
+txWaveformIdeal = blankingMask;
 
 %% 2. Power Spectral Density 
 % we use PWELCH to estimate PSD since FFT could be quite noisy due to 
@@ -212,7 +212,9 @@ plot(timeAxis_us, abs(txWaveformIdeal), 'LineWidth', 1.1);
 grid on;
 xlabel('Time [\mus]'); % since on the first line we multiplied by 1e6
 ylabel('Magnitude'); % magnitude, abs or envelope
-title('Whole Baseband Waveform Envelope');
+% title('Whole Baseband Waveform Envelope');
+% title('Interferers Waveform Envelope');
+title('Blanking Mask');
 xlim([timeAxis_us(1), timeAxis_us(end)]);
 
 %% Select one burst
