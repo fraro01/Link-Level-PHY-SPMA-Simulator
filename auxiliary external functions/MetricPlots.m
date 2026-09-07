@@ -308,12 +308,12 @@ classdef MetricPlots
                 % Remove known pilot portion
                 rxBeforeEqPayload = rxBeforeEq(numPilotSymbols+1 : end);
                 scatterplot(rxBeforeEqPayload);    
-                title(sprintf(['8-PSK Constellation Before Equalization of' ...
+                title(sprintf(['8-PSK Constellation BEFORE Equalization of' ...
                             ' First Burst']));        
                 % AFTER EQUALIZATION   
                 rxAfterEqPayload = rxEqualizedBursts(numPilotSymbols+1:end, 1);    
                 scatterplot(rxAfterEqPayload);    
-                title(sprintf(['8-PSK Constellation After MMSE ' ...
+                title(sprintf(['8-PSK Constellation AFTER MMSE ' ...
                     'Equalization of First Burst']));
             end
         end

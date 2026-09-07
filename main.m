@@ -47,12 +47,12 @@ cpLength = 10; % TODO! Must exceed the maximum channel delay in symbols
 
 %% CHANNEL PARAMETERS
 % INTERFERERS
-numInterferers = 0; % set the number of interferer nodes, NOTE! it 
+numInterferers = 3; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
 % use percentage with respect to the original value to tweak the number of 
 % transmitted bursts and the respective occupied time
-fractionTxBursts = round(numBursts * 0.0); % number of TX bursts while 
+fractionTxBursts = round(numBursts * 1.0); % number of TX bursts while 
 % Receiving, the number of TX bursts will be in any case smaller than 
 % 'numBursts',
 ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be 
@@ -60,7 +60,7 @@ ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 1; % simulation cycles
+metrics.packets = 33; % simulation cycles
 % for storing values we use a MATLAB 'Structure'
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
@@ -153,7 +153,8 @@ for i = 1:metrics.packets
      burstDetected, ...
      numPilotSymbols, ...
      rxEqualizedBursts, ...
-     H_est_bursts ...
+     H_est_bursts, ...
+     vettore ...
     ] = receiver.receiver( ...
         rxSignal, ... % input signal
         blankingMask, ...

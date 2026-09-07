@@ -18,7 +18,7 @@
 
 % takes in input the current time slot analyzed "rxIn" for the current 'k' 
 % burst under alaysis inside the main for loop of the RX
-function [rxOut, state] = agc_model(rxIn, Fs, state)
+function [rxOut, state, vettore] = agc_model(rxIn, Fs, state)
     %% PARAMETERS
     target_dBFS = -12; % decibels relative to full scale (0 would be: 
     % 10*log10(input_value / max_scale_value))
@@ -33,7 +33,7 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
     % ADC
     adcNumBits = 10; % maximum number of available bits to represent values
     adcFullScale = 1; % full scale, hence range: [-1;+1], for clipping, it 
-    % is defined in AMPLITUDE
+    % is defined in AMPLITUDE.
     % how often the AGC controller observes the time slot, estimates the 
     % level, calculates the error, updates the gain. it's the 
     % discretization of the AGC clock
@@ -50,7 +50,7 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
     numUpdatesForLock = 3;
 
     %% INITIAL STATE
-    if isempty(state) % if thge state is empty, initialize it
+    if isempty(state) % if the state is empty, initialize it
         state.GRF_dB = 0;
         state.GDIG_dB = 0;
         % at first the initial state is not locked
@@ -69,6 +69,8 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
     % initialize output vector
     rxOut = complex(zeros(size(rxIn))); % same length as the input (time 
     % slot)   
+    
+    vettore = [];
 
     % AGC LOOP
     % NOTE! the update pace is on the basis of the discretization clock set
@@ -78,6 +80,15 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
         idx = n:idxEnd; % array of sample indices
         x = rxIn(idx); % related samples
 
+        % TODO! BASED ON THE POWER LEVEL, SET A POSSIBLE "IDLE" STATE?
+        % 'continue' MAY EXIT THE FOR CYCLE
+        vettore = [vettore, sqrt(mean(abs(x).^2))];
+    %{%}
+        if sqrt(mean(abs(x).^2)) <= 0.1 % NOTE! this strongly improves EVM 
+            rxOut(idx) = 0; % if no transmission is found set the level to zero!
+            continue
+        end
+    
         %% 1. APPLY CURRENT RF GAIN
         % IMPORTANT:
         % state.GRF_dB has been calculated during the
@@ -115,8 +126,8 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
         % to be applied starting from the NEXT window.
         rmsIn = sqrt(mean(abs(x).^2)); % Root Mean Square of the AMPLITUDE
         % conversion in decibel relative to Full Scale (referred to amplit)
-        inputLevel_dBFS = 20*log10(max(rmsIn / adcFullScale, 1e-12)); % max
-        % prtoection is set
+        inputLevel_dBFS = 20*log10(max(rmsIn/adcFullScale, 1e-12)); % max,
+        % protection is set
         % DESIRED RF GAIN, distance
         desiredRFgain_dB = target_dBFS - inputLevel_dBFS;
 
@@ -124,7 +135,7 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
         % Used for LOCK / GAIN FREEZE.
         rmsOut = sqrt(mean(abs(y).^2)); % Root Mean Square of the AMPLITUDE
         % conversion in decibel relative to Full Scale (referred to amplit)
-        outputLevel_dBFS = 20*log10(max(rmsOut/adcFullScale,1e-12)); % max
+        outputLevel_dBFS = 20*log10(max(rmsOut/adcFullScale,1e-12)); % max,
         % protection is set
         % error at the current iteration, calculated as the distance
         % between what we have set now from our target
@@ -197,7 +208,7 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
             % distance from the desired gain.
             % 'attackTime' is the time constant τ of the exponential, after 
             % ONE time constant τ, we travel: (1 − e^−1) ≈ 63.2%; hence  
-            % after 'updatePeriod' = τ µs, we are at the 63.2% of the 
+            % after: 'updatePeriod' = τ µs, we are at the 63.2% of the 
             % correction
             alpha = 1 - exp(-updatePeriod/tau);
             % RF gain for NEXT AGC window
@@ -228,7 +239,7 @@ function [rxOut, state] = agc_model(rxIn, Fs, state)
         end
 
         % IMPLICIT GAIN FREEZE
-        % If state.locked == true:
+        % If state.locked == true:   % (that is a condition verified above)
         %
         % GRF and GDIG are NOT updated.
         %
