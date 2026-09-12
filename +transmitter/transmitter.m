@@ -173,23 +173,34 @@ function [packet, ... % original packet with random bits
     % transmission of a burst to create tails that exceed their own allocated 
     % time slot.
     shapedBurstTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
-    % TX tuner delay: 1 microsecond
-    tunerDelay_s = 1e-6;
-    % Maximum random intra-slot offset.
-    % Reserve tunerDelay_s at the beginning so that the complete
-    % transmitted waveform remains inside its allocated time slot.
-    % the tuner delay is absorbed inside the allocated time slot of the burst!!
-    maxOffset = slotDuration - shapedBurstTime - tunerDelay_s;
-    % Random transmission position inside the available part of the slot
-    intraSlotOffset = rand(numBursts,1) * maxOffset; % uniform distribution!
+    % TX tuner delay: 1 microsecond, only when frequency changes
+    tunerDelay_s = 1e-6;    
+    
     % array of values between 1 and #numFrequencyChannels of length #numBursts
     frequencyChannels = randi( ...
         [1 numFrequencyChannels], ...
         numBursts, ...
         1);
     carrierForBurst = carrierFrequencies(frequencyChannels).';
-    startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset + ...
-                tunerDelay_s; % arrray
+
+    % Per-burst tuner delay
+    tunerDelayPerBurst = zeros(numBursts,1);
+    for k = 2:numBursts
+        if frequencyChannels(k) ~= frequencyChannels(k-1)
+            tunerDelayPerBurst(k) = tunerDelay_s;
+        end
+    end
+    
+    % Maximum random intra-slot offset.
+    % When a frequency change occurs, reserve tunerDelay_s inside the slot
+    % so that the complete transmitted waveform remains within its
+    % allocated time slot.
+    maxOffset = slotDuration - shapedBurstTime - tunerDelayPerBurst;
+    % Random transmission position inside the available part of the slot
+    intraSlotOffset = rand(numBursts,1) .* maxOffset; % uniform distribution!
+    
+    startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset ...
+        + tunerDelayPerBurst;
     endTimes = startTimes + burstTxTime; % array
     
     

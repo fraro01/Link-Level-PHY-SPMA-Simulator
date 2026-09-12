@@ -272,8 +272,6 @@ function [errMax, ...
             end
         end
 
-
-
         % 6. LOOK FOR THE BEST CORRELATION CANDIDATE, MAXIMUM NORMALIZED SCORE
         % Since every candidate has its own blanking-compensated threshold,
         % compare candidates through the normalized detection score:
