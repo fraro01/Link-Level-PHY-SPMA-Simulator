@@ -19,9 +19,12 @@ addpath('utils') % for testing functions
 % name, acting as a package/namespace
 
 %% TRANSMITTER PARAMATERS
+% TX tuner delay: 1 microsecond, only when frequency changes
+tunerDelay_s = 1e-6;
 % Set the length of the packet in bits
 packetLength = 1331; % bits
-dutyCycle = 0.25; % percentage TX/RX
+dutyCycle = 1.0; % percentage TX/RX TODO! do not put it below 1 (<1), since 
+% some work has to be done before that!
 numBursts = 28;
 % the sync and the reference bits remain fixed for all bursts
 rng(1); % fixed seed to keep fixed only the two random variables below
@@ -52,7 +55,7 @@ numInterferers = 0; % set the number of interferer nodes, NOTE! it
 % BLANKING COMPENSATION
 % use percentage with respect to the original value to tweak the number of 
 % transmitted bursts and the respective occupied time
-fractionTxBursts = round(numBursts * 0.75); % number of TX bursts while 
+fractionTxBursts = round(numBursts * 0.0); % number of TX bursts while 
 % Receiving, the number of TX bursts will be in any case smaller than 
 % 'numBursts',
 ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be 
@@ -60,7 +63,7 @@ ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 33; % simulation cycles
+metrics.packets = 1; % simulation cycles
 % for storing values we use a MATLAB 'Structure'
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
@@ -113,7 +116,8 @@ for i = 1:metrics.packets
      symbolRate, ...
      samplesPerSymbol, ...
      Fs, ... % sampling frequency
-     cpLength ... % Cyclic Prefix for SCFDE
+     cpLength, ... % Cyclic Prefix for SCFDE
+     tunerDelay_s ... % tuner delay for carriers
      );
       
     %% CHANNEL
@@ -173,14 +177,12 @@ for i = 1:metrics.packets
         symbolsPerBurstWithCP, ...
         modulatedBursts, ...
         txSCFDEBursts, ...
-        frequencyChannels, ...
         relativeCarrierFrequencies, ...    
         rolloff, ...
         filterSpan, ...
         symbolRate, ...
         samplesPerSymbol, ...
-        Fs, ...    
-        slotDuration, ...
+        Fs, ...
         show_metrics_plots, ...
         i ...
         );

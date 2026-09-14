@@ -28,14 +28,12 @@ function [errMax, ...
                                     symbolsPerBurstWithCP, ...
                                     modulatedBursts, ...
                                     txSCFDEBursts, ...
-                                    frequencyChannels, ...
                                     relativeCarrierFrequencies, ...    
                                     rolloff, ...
                                     filterSpan, ...
                                     symbolRate, ...
                                     samplesPerSymbol, ...
-                                    Fs, ...    
-                                    slotDuration, ...
+                                    Fs, ...
                                     show_metrics_plots, ...
                                     i ...
                                     )
@@ -44,14 +42,22 @@ function [errMax, ...
     %% Realistic Burst Time Synchronization Using Preamble Correlation
     %% Finite States Machine: RF AGC --> ADC --> DIGITAL AGC
     %% Carrier Synchronization (Frequency Synch. and Phase Synch.)
-    % The Rx knows:
-    %   - "Slot" duration
+    % The RX knows:
+    %   - Set of possible frequency channels
+    %   - Synchronization symbols
+    %   - PHY waveform parameters
+    %
+    % The RX DOES NOT know:
     %   - Frequency hopping sequence
-    %   - Sync symbols
-    % The Rx DOES NOT know:
-    %   - startTimes(k) hence the start time of transmission of each burst
-    %   - intraSlotOffset(k) the offset of the bursts inside their own slot
-    %   - the exact sample of burst start
+    %   - carrier frequency used by each burst
+    %   - Burst transmission times
+    %   - Burst arrival times
+    %   - Time slots
+    %   - Exact sample of burst start
+    %
+    % Therefore burst acquisition is performed jointly in:
+    %   1. FREQUENCY: scan all possible carrier frequencies
+    %   2. TIME: search the known preamble over the complete received waveform
     
     % Configuration of knownSyncSymbols for Time Synchronization(4.CORRELATION)
     % numbers of complete symbols inside the syncReference
@@ -119,22 +125,387 @@ function [errMax, ...
     
     % for Burst Erasure
     burstDetected = false(numBursts,1);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    %% TIME-FREQUENCY BURST ACQUISITION
+    % Number of possible RF channels known by the receiver.
+    % NOTE:
+    % the RX knows ONLY the set of possible frequencies,
+    % NOT the hopping sequence.
+    numPossibleFrequencyChannels = length(relativeCarrierFrequencies);
+    
+    % Complete received timeline.
+    numRxSamples = length(rxSignal); % whole received packet in samples
+    globalSampleIndices = (0:numRxSamples-1).';
+    tRx = globalSampleIndices / Fs; % array of time evolution of the packet
+    
+    % RRC group delay expressed in samples
+    rxRRCGroupDelaySamples = filterSpan * samplesPerSymbol / 2;
+    
+    % Store the matched-filter output for every possible frequency channel.
+    % We use a cell array because later, once a detection is found, we need
+    % to return to the corresponding channel waveform and extract the burst.
+    rxMatchedByChannel = cell(numPossibleFrequencyChannels,1);
+    
+    % Structure containing all possible burst detections found during the
+    % time-frequency search.
+    detections = struct( ...
+        'firstSyncSample', {}, ...
+        'channelIndex', {}, ...
+        'frequency', {}, ...
+        'score', {}, ...
+        'metricIndex', {});
+    
+    % Diagnostic output of the AGC.
+    vettore = [];
+
+    %% 1. FREQUENCY SCANNING OVER THE COMPLETE RECEIVED WAVEFORM
+    for ch = 1:numPossibleFrequencyChannels
+    
+        % Candidate relative carrier frequency.
+        % The receiver is simply testing one of the possible RF channels.
+        fRel = relativeCarrierFrequencies(ch);
+
+        %% 1.1 DOWNCONVERT THE WHOLE RECEIVED WAVEFORM    
+        rxChannelBasebandRaw = rxSignal .* exp(-1j * 2*pi * fRel * tRx);
+    
+        %% 1.2 AGC + ADC    
+        % Each frequency hypothesis must start from the same receiver state.
+        % Do NOT carry the AGC state from one hypothetical frequency channel
+        % to another.
+        agcStateChannel = [];    
+        [rxChannelBasebandADC, ...
+         ~, ...
+         agcDiagnostic] = ...
+            agc_model(rxChannelBasebandRaw, Fs, agcStateChannel);
+    
+        % Optional diagnostic storage.
+        vettore = [vettore, agcDiagnostic];
+    
+        %% 1.3 RRC MATCHED FILTER    
+        % The same System object is reused for independent channel hypotheses.
+        % Reset its internal memory before processing another full waveform.
+        reset(rxRRCsync);    
+        rxChannelMatched = rxRRCsync(rxChannelBasebandADC);
+    
+        % Save it because, if we later detect a burst on this channel,
+        % we will need this waveform for burst extraction.
+        rxMatchedByChannel{ch} = rxChannelMatched; % store the RRC RX 
+        % output
+    
+    %% 2. TIME SYNCHRONIZATION OVER THE COMPLETE TIMELINE
+        numMatchedSamples = length(rxChannelMatched); 
+    
+        % Earliest possible position of the first synchronization symbol.
+        % There must be enough space before it for the cyclic prefix.
+        firstCandidate = cpLength * samplesPerSymbol + 1;    
+        % Latest possible synchronization position for which the complete
+        % burst can still be extracted from the received waveform.
+        lastCandidate = numMatchedSamples ...
+            - (symbolsPerBurstWithCP - cpLength - 1) * samplesPerSymbol;
+    
+        numCandidates = lastCandidate - firstCandidate + 1;
+    
+        % Safety check. (if there are no candidates)
+        if numCandidates <= 0
+            continue;
+        end
+    
+        syncMetric = zeros(numCandidates,1);
+        numBlankedSyncSymbols = zeros(numCandidates,1);
+        syncThresholdCandidate = zeros(numCandidates,1);
+
+        for candidateIdx = 1:numCandidates
+
+            % Candidate sample corresponding to the first sync symbol.
+            q = firstCandidate + candidateIdx - 1;
+            % Candidate synchronization-symbol sampling positions.
+            syncSampleIndices = q + (0:numSyncSymbols-1).' * samplesPerSymbol;
+            % Extract possible synchronization sequence.
+            receivedSyncCandidate = rxChannelMatched(syncSampleIndices);
+            % Candidate energy.
+            receivedEnergy = sum(abs(receivedSyncCandidate).^2);
+    
+            if receivedEnergy > 1e-12    
+                % Normalize candidate sequence.
+                receivedSyncNormalized = ...
+                receivedSyncCandidate / sqrt(receivedEnergy);
+                % Normalized complex correlation with known preamble.
+                correlationValue = ...
+                knownSyncSymbolsNormalized' * receivedSyncNormalized;
+                % Phase-insensitive synchronization metric.
+                syncMetric(candidateIdx) = abs(correlationValue)^2;
+            end
+    
+            %% BLANKING COMPENSATION
+            % rxChannelMatched is referred directly to the complete RX
+            % timeline, and is delayed by the RX RRC group delay, so that
+            % delay must be removed before checking the blanking state.
+            % We only compensate the RRC group delay.
+            globalBlankingSampleIndices = syncSampleIndices - rxRRCGroupDelaySamples;    
+            % Make sure indices are inside the global blanking mask.
+            validMaskIndices = globalBlankingSampleIndices >= 1 & ...
+                globalBlankingSampleIndices <= length(blankingMask);    
+            % Default assumption outside modeled waveform:
+            % Receiver available.
+            candidateBlankingStates = ones(numSyncSymbols,1);    
+            % Read the actual local-TX blanking state from the GLOBAL mask.
+            % This is the key step for determining which of the 32 candidate sync symbols
+            % are actually blanked. candidateBlankingStates is initially set to all ones.
+            % Only the candidates that satisfy the blanking-mask boundaries, identified by
+            % validMaskIndices, are updated. Their values are set to the corresponding
+            % entries of the global blankingMask, using globalBlankingSampleIndices to map
+            % each candidate sync symbol to its position in the global mask.
+            candidateBlankingStates(validMaskIndices) = ...
+               blankingMask(globalBlankingSampleIndices(validMaskIndices));    
+            % Number of blanked synchronization symbols.
+            numBlankedSyncSymbols(candidateIdx) = ...
+                sum(candidateBlankingStates == 0);    
+            % Fraction of usable synchronization symbols, for blanking
+            % compensation
+            numUsableSyncSymbols = ...
+                numSyncSymbols - numBlankedSyncSymbols(candidateIdx);    
+            usableFraction = numUsableSyncSymbols / numSyncSymbols;
+            % important check-point if too many symbols are blanked
+            if usableFraction < minUsableSyncFraction    
+                % Reject candidate.
+                syncThresholdCandidate(candidateIdx) = Inf;    
+            else % calculate the variable threshold of Blanking Compens
+                % Blanking-compensated threshold.
+                syncThresholdCandidate(candidateIdx) = ...
+                    syncDetectionThreshold * usableFraction;    
+            end
+
+        end
+        
+        %% 3. NORMALIZED DETECTION SCORE
+        detectionScore = zeros(numCandidates,1);    
+        validCandidates = isfinite(syncThresholdCandidate);    
+        detectionScore(validCandidates) = ...
+            syncMetric(validCandidates) ./ ...
+            syncThresholdCandidate(validCandidates);
+        
+        %% 4. FIND ALL PREAMBLE PEAKS ON THIS FREQUENCY CHANNEL
+        % Two detections belonging to the same physical burst must not be
+        % interpreted as two separate bursts.
+        % A burst cannot realistically start again a few samples after itself.
+        % Use approximately 80% of one burst duration as minimum separation.
+        minPeakDistanceSamples = ...
+            max(1, round(0.8 * symbolsPerBurstWithCP * samplesPerSymbol));
+    
+        [peakScores, peakCandidateIndices] = ...
+            findpeaks( ...
+                detectionScore, ...
+                'MinPeakHeight', 1, ...
+                'MinPeakDistance', minPeakDistanceSamples);
+        % store the detection
+        for p = 1:length(peakCandidateIndices)
+            candidateIdx = peakCandidateIndices(p);    
+            % Convert metric index into matched-filter sample index.
+            firstSyncSample = firstCandidate + candidateIdx - 1;    
+            newDetection.firstSyncSample = firstSyncSample;    
+            newDetection.channelIndex = ch;    
+            newDetection.frequency = fRel;    
+            newDetection.score = peakScores(p);    
+            newDetection.metricIndex = candidateIdx;    
+            detections(end+1) = newDetection;    
+        end
+
+    end
+
+    %% 5. REMOVE DUPLICATE TIME DETECTIONS ACROSS FREQUENCY CHANNELS
+    if ~isempty(detections)    
+        % First process strongest detections.
+        [~, scoreOrder] = sort([detections.score], 'descend');    
+        detectionsByScore = detections(scoreOrder);    
+        detectionsClean = detections([]);    
+        % Two detections within this interval are considered the same burst.
+        duplicateToleranceSamples = 2 * samplesPerSymbol;
+
+        for d = 1:length(detectionsByScore)    
+            currentDetection = detectionsByScore(d);    
+            isDuplicate = false;    
+            for a = 1:length(detectionsClean)    
+                if abs( ...
+                    currentDetection.firstSyncSample ...
+                    - detectionsClean(a).firstSyncSample) ...
+                    <= duplicateToleranceSamples
+    
+                    isDuplicate = true;
+                    break;    
+                end
+            end
+    
+            % Since detections are inspected from strongest to weakest,
+            % the strongest frequency hypothesis is automatically retained.
+            if ~isDuplicate
+                detectionsClean(end+1) = currentDetection;
+            end    
+        end    
+        detections = detectionsClean;    
+    end
+
+    %% 6. ORDER DETECTED BURSTS BY ARRIVAL TIME
+    if ~isempty(detections)
+        [~, timeOrder] = sort([detections.firstSyncSample], 'ascend');
+        detections = detections(timeOrder);
+    end
+
+    if length(detections) > numBursts
+        % Keep the strongest numBursts detections first.
+        [~, strongestOrder] = sort([detections.score], 'descend');
+        detections = detections(strongestOrder(1:numBursts));
+        % Restore chronological order.
+        [~, timeOrder] = sort([detections.firstSyncSample], 'ascend');
+        detections = detections(timeOrder);
+    end
+
+    %% 7. PROCESS ALL DETECTED BURSTS
+    numDetectedBursts = min(length(detections), numBursts);    
+    for k = 1:numDetectedBursts
+        % k now means:
+        % "k-th burst detected in chronological order"
+        currentDetection = detections(k);
+        % Frequency channel autonomously discovered by the RX.
+        detectedChannel = currentDetection.channelIndex;    
+        detectedFrequency = currentDetection.frequency;    
+        % First synchronization symbol position.
+        firstSyncSample = currentDetection.firstSyncSample;    
+        % Retrieve matched-filter output corresponding to the frequency
+        % autonomously selected during acquisition.
+        rxChannelMatched = rxMatchedByChannel{detectedChannel};    
+        numMatchedSamples = length(rxChannelMatched);
+
+    %% 8. FIND CYCLIC PREFIX START
+    firstCPSample = firstSyncSample - cpLength * samplesPerSymbol;
+    burstSampleIndices = firstCPSample + (0:symbolsPerBurstWithCP-1).' ...
+        * samplesPerSymbol;
+    if burstSampleIndices(1) < 1 || ...
+       burstSampleIndices(end) > numMatchedSamples
+
+        % Detection exists, but complete burst cannot be extracted.
+        burstDetected(k) = false;
+        continue;
+
+    end
+
+    burstDetected(k) = true;
+
+    rxBurstSymbols = rxChannelMatched(burstSampleIndices);
+
+
+    % 9.1. FEED-FORWARD CARRIER SYNCHRONIZATION (ACQUISITION)
+    % 9.1.1. EXTRACT THE KNOWN CARRIER PILOTS
+    receivedCarrierPilotSymbols = ... % take only the known pilots!
+        rxBurstSymbols(carrierPilotIndicesInBurst);
+    
+    % 9.1.2. REMOVE THE KNOWN PILOT MODULATION
+    % keep in mind the error we must correct: ϕ(t) = ϕ0 + 2πΔft
+    % If:
+    % receivedPilot(m) ≈ knownPilot(m) * exp(j*(2πΔft+ϕ0​))
+    % then:
+    % receivedPilot(m) * conj(knownPilot(m)) ≈ exp(j*(2πΔft+ϕ0​))
+    % because 8-PSK symbols have unit magnitude!
+    carrierPilotProducts = ...
+        receivedCarrierPilotSymbols .* conj(knownCarrierPilotSymbols); % so
+    % NOTE! carrierPilotProducts contains only the complex exponential: 
+    % exp(j*(2πΔft + ϕ0​)) only in the case of a flat channel! In case of
+    % multipath, like ours, it also contains: current pilots, other pilots
+    % and symbols, ISI, transient of RRC --> hence the phase we feed to the
+    % polyfit below also contains: linear phase due to CFO, phase/distortion
+    % due to multipath, noise. Neighbouring symbols contribute to each
+    % received symbol
+    % hence it works as long as: the LOS dominates, other taps are small,
+    % pilots are long, CFO generates a slope enough evident, timing is
+    % accurate, SNR is high, channel is constant through the burst
+    
+    % 9.1.3. MEASURE AND UNWRAP THE PILOT PHASE
+    wrappedPilotPhase = angle(carrierPilotProducts);
+    % angle() returns values between -pi and +pi.
+    % unwrap() removes artificial jumps of approximately 2*pi, converting
+    % the phase evolution into an approximately continuous line.
+    unwrappedPilotPhase = unwrap(wrappedPilotPhase);
+    
+    % 9.1.4. ESTIMATE PHASE INTERCEPT AND PHASE SLOPE
+    % The first known pilot has relative symbol index zero.
+    carrierPilotRelativeIndex = (0:numCarrierPilotSymbols-1).';
+    % Linear least-squares fit:
+    % keep in mind the error we must correct: ϕ(t) = 2πΔft + ϕ0​
+    % phase(m) ≈ slope*m + intercept
+    % p(1) = slope in radians per symbol
+    % p(2) = intercept in radians
+    % polyfit(x,y,u): 
+    % x --> indipendent variable;
+    % y --> dependent variable;
+    % u is the degree of the polynome (1 is the linear)
+    % then it returns the slope and the intercept
+    phaseFit = polyfit(carrierPilotRelativeIndex, unwrappedPilotPhase, 1);
+    estimatedPhaseSlope_radPerSymbol = phaseFit(1);
+    estimatedPhaseIntercept_rad = phaseFit(2);
+    % ϕ(t) = 2πΔft + ϕ0 ...that for us it tranlsates to:
+    % unwrappedPilotPhase = ...
+    % estimatedPhaseSlope_radPerSymbol * carrierPilotRelativeIndex ...
+    % + estimatedPhaseIntercept_rad                
+
+    % 9.1.5. CONVERT PHASE SLOPE TO CFO
+    % phase_variation_per_symbol = [2π * ​Δf] / Symbol_Rate
+    % thus: Δf = [phase_variation_per_symbol * Symbol_Rate] / 2*pi​
+    estimatedCarrierFrequencyOffset_Hz(k) = ...
+        estimatedPhaseSlope_radPerSymbol * symbolRate / (2*pi);
+    % Wrap the initial phase estimate to the interval [-pi, +pi].
+    estimatedCarrierPhaseOffset_rad(k) = ...
+        angle(exp(1j*estimatedPhaseIntercept_rad));                
+    
+    % 9.1.6. CORRECT CP and useful burst symbols
+    % Symbol index relative to the first synchronization/pilot symbol:
+    % CP symbols: -cpLength, ..., -1
+    % First synchronization: 0
+    % Last useful symbol: symbolsPerBurst-1
+    burstRelativeSymbolIndex = (-cpLength:symbolsPerBurst-1).'; % it 
+    % start from negative since it also includes the CP, but the
+    % reference point (0) coincides with the first sample of the
+    % sync reference symbols (as we did in TX). Negative values are
+    % inserted since the angular phase rotation allows them, it is
+    % an elegant consequence of the conversions: linear<->angular
+    assert( ...
+        length(burstRelativeSymbolIndex) == length(rxBurstSymbols), ...
+   'Carrier-correction vector and received burst have different lengths.');
+    % estimate of ϕ(t) = ϕ0 + 2πΔft
+    estimatedCarrierPhaseEvolution = ...
+        estimatedCarrierPhaseOffset_rad(k) ...
+        + 2*pi ...
+        * estimatedCarrierFrequencyOffset_Hz(k) ...
+        * burstRelativeSymbolIndex ...
+        / symbolRate;
+    % correct the burst symbols with the opposite (-1j) of the impairments 
+    % that were introduced by the channel
+    rxBurstSymbolsCarrierCorrected = ...
+        rxBurstSymbols .* ...
+        exp(-1j*estimatedCarrierPhaseEvolution);
+
+    % finally at the very end now save the corrected received burst
+    rxSCFDEBursts(:,k) = rxBurstSymbolsCarrierCorrected;
+
+    end
+
+
+%{
     
     % initialize empty Structure Array, for storing states for the Finite
     % States Machines of the AGC
     agcState = [];
-    
+
     % NOTE! this is the main external cycle that iterates over all the bursts, 
     % and it's divided into 8 distinct sections, with some sub-sections as well
     % it is very big!
     for k = 1:numBursts
-        reset(rxRRCsync); % clean the filter
-    
+        
         % 1. EXTRACTION OF THE ENTIRE TIME SLOT
         % We do not use startTimes(k).
         % the RX looks at the whole slot k.
-        slotStartTime = (k-1) * slotDuration;
-        slotEndTime   = k * slotDuration;
+        slotStartTime = (k-1) * slotDuration + cumulativeTunerDelay(k);
+        slotEndTime = slotStartTime + slotDuration;
         slotStartSample = floor(slotStartTime * Fs) + 1;
         slotEndSample   = min(ceil(slotEndTime * Fs), length(rxSignal));
         rxSlotUpconverted = rxSignal(slotStartSample : slotEndSample);
@@ -457,6 +828,7 @@ function [errMax, ...
 
     end
        
+%}
     
     %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
     %% SC-FDE Demodulation with MMSE Equalization

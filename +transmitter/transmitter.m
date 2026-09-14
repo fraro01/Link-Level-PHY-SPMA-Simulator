@@ -35,7 +35,8 @@ function [packet, ... % original packet with random bits
           symbolRate, ...
           samplesPerSymbol, ...
           Fs, ... % sampling frequency
-          cpLength ... % Cyclic Prefix for SCFDE
+          cpLength, ... % Cyclic Prefix for SCFDE
+          tunerDelay_s ... % tuner delay for carriers
           )
  
 
@@ -152,15 +153,16 @@ function [packet, ... % original packet with random bits
     % Configuration of Root Raised Cosine TX Filter, we configure the "rolloff"
     % now, because is used to calculate the Symbol Rate from the formula below
     % timing
-    burstTxTime = symbolsPerBurstWithCP / symbolRate;     % seconds
+    % NOTE! if below we also include the variable: 'filterSpan' we get the 
+    % real physical time for transmitting a burst, because we take into
+    % account also the tails of the RRC
+    burstTxTime = (symbolsPerBurstWithCP + filterSpan)/ symbolRate; % seconds
     slotDuration = burstTxTime / dutyCycle;               % seconds
     % fundamental check of the logic: burstTxTime / slotDuration = dutyCycle
     % Frequency channels
     channelBandwidth = (fMax - fMin) / numFrequencyChannels;
     carrierFrequencies = fMin + channelBandwidth/2 + ...
         (0:numFrequencyChannels-1)*channelBandwidth; % list comprehension (0:i)
-    % Time-frequency hopping pattern
-    timeSlots = 1:numBursts; % vector column
     
     % Random offset inside each slot, without taking into account RRC tails in
     % which a burst could be transmitted even in the final edge of its timeSlot
@@ -172,35 +174,30 @@ function [packet, ... % original packet with random bits
     % block. But it is essential to define it here in order to prevent the
     % transmission of a burst to create tails that exceed their own allocated 
     % time slot.
-    shapedBurstTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate; 
-    % TX tuner delay: 1 microsecond, only when frequency changes
-    tunerDelay_s = 1e-6;    
-    
+        
     % array of values between 1 and #numFrequencyChannels of length #numBursts
     frequencyChannels = randi( ...
         [1 numFrequencyChannels], ...
         numBursts, ...
         1);
     carrierForBurst = carrierFrequencies(frequencyChannels).';
-
-    % Per-burst tuner delay
-    tunerDelayPerBurst = zeros(numBursts,1);
+    
+    % start times defintion and tuner delay if two consecutive bursts are 
+    % sent on different carriers
+    tunerDelayPerBurst = zeros(numBursts,1); % Per-burst tuner delay
+    startTimes = zeros(numBursts,1); % start TX cumulative
     for k = 2:numBursts
         if frequencyChannels(k) ~= frequencyChannels(k-1)
-            tunerDelayPerBurst(k) = tunerDelay_s;
+            tunerDelayPerBurst(k) = tunerDelay_s;   % 1 us
+        else
+            tunerDelayPerBurst(k) = 0;
         end
+        % cumulative!
+        startTimes(k) = startTimes(k-1) ...
+                      + burstTxTime ...
+                      + tunerDelayPerBurst(k);
     end
-    
-    % Maximum random intra-slot offset.
-    % When a frequency change occurs, reserve tunerDelay_s inside the slot
-    % so that the complete transmitted waveform remains within its
-    % allocated time slot.
-    maxOffset = slotDuration - shapedBurstTime - tunerDelayPerBurst;
-    % Random transmission position inside the available part of the slot
-    intraSlotOffset = rand(numBursts,1) .* maxOffset; % uniform distribution!
-    
-    startTimes = (timeSlots - 1).' * slotDuration + intraSlotOffset ...
-        + tunerDelayPerBurst;
+
     endTimes = startTimes + burstTxTime; % array
     
     
