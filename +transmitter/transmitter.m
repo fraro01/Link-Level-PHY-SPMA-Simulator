@@ -18,12 +18,10 @@ function [packet, ... % original packet with random bits
           relativeCarrierFrequencies, ... % equivalent baseband
           carrierForBurst, ... 
           burstTxTime, ...
-          slotDuration, ...
           startTimes, ... % per burst
           txSignal ... % FINAL TRANSMITTED SIGNAL
          ] = transmitter(...
           packetLength, ...
-          dutyCycle, ... % percentage: TX/RX
           numBursts, ... % how many bursts a packet is divided into
           syncReference, ... % fixed preamble above
           phaseReference, ... % fixed preamble above
@@ -77,20 +75,19 @@ function [packet, ... % original packet with random bits
     %% 48 sync reference bits, 48 phase reference bits, 5 indexing bits
     
     % integer superior part of the log2 --> add minimum number of indexing bits
-    % numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
+    numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
     % matrix of zeros
     framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
-                            length(phaseReference), ... % + numIndexBits, ... 
+                            length(phaseReference) + numIndexBits, ... 
                             numBursts);
     for k = 1:numBursts
         % decimal to binary, with numIndexBits as #bits of result, most
         % significant bit is put left (used in TLC), then we transpose it: .'
-      % burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
-        framedBursts(:,k) = [ % take all rows of cloumn k
-        % vertical concatenation of three vectors
+        burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
+        framedBursts(:,k) = [ ... % take all rows of cloumn k vertical concatenation of three vectors
             syncReference;        % 48 bit
             phaseReference;       % 48 bit
-          % burstIndexBits;       % 5 bit: burst identifier
+            burstIndexBits;       % 5 bit: burst identifier
             bursts(:,k)           % 144 bit coded, from column k
         ];
     end
@@ -157,7 +154,6 @@ function [packet, ... % original packet with random bits
     % real physical time for transmitting a burst, because we take into
     % account also the tails of the RRC
     burstTxTime = (symbolsPerBurstWithCP + filterSpan)/ symbolRate; % seconds
-    slotDuration = burstTxTime / dutyCycle;               % seconds
     % fundamental check of the logic: burstTxTime / slotDuration = dutyCycle
     % Frequency channels
     channelBandwidth = (fMax - fMin) / numFrequencyChannels;

@@ -18,7 +18,7 @@
 
 % takes in input the current time slot analyzed "rxIn" for the current 'k' 
 % burst under alaysis inside the main for loop of the RX
-function [rxOut, state, vettore] = agc_model(rxIn, Fs, state)
+function [rxOut, vettore] = agc_model(rxIn, Fs)
     %% PARAMETERS
     target_dBFS = -12; % decibels relative to full scale (0 would be: 
     % 10*log10(input_value / max_scale_value))
@@ -50,13 +50,12 @@ function [rxOut, state, vettore] = agc_model(rxIn, Fs, state)
     numUpdatesForLock = 3;
 
     %% INITIAL STATE
-    if isempty(state) % if the state is empty, initialize it
-        state.GRF_dB = 0;
-        state.GDIG_dB = 0;
-        % at first the initial state is not locked
-        state.locked = false;
-        state.lockCounter = 0;
-    end
+    % initialize the state
+    state.GRF_dB = 0;
+    state.GDIG_dB = 0;
+    % at first the initial state is not locked
+    state.locked = false;
+    state.lockCounter = 0;
 
     %% ADC PARAMETERS
     % ADC maximum positive integer code.
@@ -82,7 +81,7 @@ function [rxOut, state, vettore] = agc_model(rxIn, Fs, state)
 
         % TODO! BASED ON THE POWER LEVEL, SET A POSSIBLE "IDLE" STATE?
         % 'continue' MAY EXIT THE FOR CYCLE
-        vettore = [vettore, sqrt(mean(abs(x).^2))];
+        vettore = [vettore; sqrt(mean(abs(x).^2))];
     %{%}
         if sqrt(mean(abs(x).^2)) <= 0.1 % NOTE! this strongly improves EVM 
             rxOut(idx) = 0; % if no transmission is found set the level to zero!
