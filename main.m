@@ -52,7 +52,7 @@ numInterferers = 0; % set the number of interferer nodes, NOTE! it
 % BLANKING COMPENSATION
 % use percentage with respect to the original value to tweak the number of 
 % transmitted bursts and the respective occupied time
-fractionTxBursts = round(numBursts * 0.75); % number of TX bursts while 
+fractionTxBursts = round(numBursts * 0.0); % number of TX bursts while 
 % Receiving, the number of TX bursts will be in any case smaller than 
 % 'numBursts',
 ex_fractionBurstOccupiedTime = 1.0; % time occupied by a TX burst, will be 
