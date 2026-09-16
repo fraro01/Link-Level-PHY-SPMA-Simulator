@@ -37,7 +37,8 @@ function [errMax, ...
                                     samplesPerSymbol, ...
                                     Fs, ...
                                     show_metrics_plots, ...
-                                    i ...
+                                    i, ...
+                                    numProtectedIndexBits ...
                                     )
 
     %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
@@ -72,9 +73,11 @@ function [errMax, ...
     % the power received
     knownSyncSymbolsNormalized = knownSyncSymbols / ...
         sqrt(sum(abs(knownSyncSymbols).^2));
-    % Burst identifier configuration
-    % Number of bits used by the transmitter to identify each burst.
-    numIndexBits = ceil(log2(numBursts));
+
+    % Burst-index codebook configuration.
+    % RX knows the codebook, but NOT which burst will arrive when.
+    burstIndexCodebook = generateBurstIndexCodebook(numBursts, ...
+                                                    numProtectedIndexBits);
     
     % RRC filter RX
     % NOTE!:
@@ -112,8 +115,6 @@ function [errMax, ...
     % for Burst Erasure
     burstDetected = false(numBursts,1);
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
     %% TIME-FREQUENCY BURST ACQUISITION
     % Number of possible RF channels known by the receiver.
     % the RX knows ONLY the set of possible frequencies,
@@ -138,7 +139,11 @@ function [errMax, ...
     % the cell array allows to store data of different dimensions and types
     % together
     rxMatchedByChannel = cell(numPossibleFrequencyChannels,1); % it will be 
-    % of length: #numChannels x #numRxSamples 
+    % of length: #numChannels x #numRxSamples
+    % Synchronization quantities for each scanned frequency for the
+    % 'MetricsPlots'
+    syncMetricByChannel = cell(numPossibleFrequencyChannels,1);
+    syncThresholdByChannel = cell(numPossibleFrequencyChannels,1);
     
     % Structure containing all possible burst detections found during the
     % time-frequency search.
@@ -306,6 +311,10 @@ function [errMax, ...
             end
 
         end
+        
+        % for the 'metricsPlots'
+        syncMetricByChannel{ch} = syncMetric;
+        syncThresholdByChannel{ch} = syncThresholdCandidate;
         
     %% 3. NORMALIZED DETECTION SCORE
         % Since every candidate has its own blanking-compensated threshold,
@@ -547,6 +556,27 @@ function [errMax, ...
         % finally at the very end now save the corrected received burst
         rxSCFDEBursts(:,k) = rxBurstSymbolsCarrierCorrected;
 
+        % Matche Filter and Carrier Estimation PLOTS
+        if show_metrics_plots == true && i == 1 && k == 1
+
+            % Synchronization quantities corresponding exactly to the
+            % frequency channel on which this burst was detected.
+            detectedSyncMetric = syncMetricByChannel{detectedChannel};        
+            detectedSyncThreshold = syncThresholdByChannel{detectedChannel};        
+            % Index of this detection inside the synchronization metric.
+            detectedPeakIndex = currentDetection.metricIndex;
+        
+            MetricPlots.blindMatchedFilter_plot(k, ...
+                                                detectedSyncMetric, ...
+                                                detectedPeakIndex, ...
+                                                detectedSyncThreshold);
+        
+            MetricPlots.blindFrequencyOffset_plot(k, ...
+                                            phaseFit, ...
+                                            carrierPilotRelativeIndex, ...
+                                            unwrappedPilotPhase);
+        end
+
     end
     
 
@@ -685,23 +715,23 @@ function [errMax, ...
 
     
     %% 8-PSK Demodulation
+    % take the equalized bursts
     rxModulatedBursts = rxEqualizedBursts;
 
     % Temporary storage indexed by DETECTION order.
     % At this stage column k does NOT necessarily correspond to the 
     % chronologically transmitted burst k. The true burst position will be 
-    % recovered from burstIndexBits.
+    % recovered from 'burstIndexBits'.
     rxFramedBurstsPaddedLLR_detected = ...
-        zeros(symbolsPerBurst * bitsPerSymbol, numBursts);    
-    % Decoded burst identifier for diagnostic purposes.
-    detectedBurstIndex = nan(numBursts,1);
-
+        zeros(symbolsPerBurst * bitsPerSymbol, numBursts);
+    
+    % 8-PSK demodulation cycle
     for k = 1:numBursts
         % if the current burst was not found (erased), we directly skip its
-        % demodulation
+        % demodulation and we go to the next burst.
         if ~burstDetected(k)
             % Erased burst --> leave all LLRs equal to zero, initializated in:
-            % 'rxFramedBurstsPaddedLLR'; sync failure⇒burst erasure⇒LLR=0⇒
+            % 'rxFramedBurstsPaddedLLR_detected'; sync failure⇒burst erasure⇒LLR=0⇒
             % ⇒Turbo decoder receives no information from that burst.
             continue;
         end
@@ -718,58 +748,96 @@ function [errMax, ...
             'gray', ...
             'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the likelihoods
             'NoiseVariance', noiseVariance_k);
+        % Store according to DETECTION order for the moment.
         rxFramedBurstsPaddedLLR_detected(:,k) = burstLLR; % a soft value per each bit
     end
 
     % BURST INDEX DECODING AND REORDERING
     % Length of the known part preceding the burst identifier.
     knownHeaderLength = length(syncReference) + length(phaseReference);    
-    % Position of burstIndexBits inside each received frame.
-    indexBitPositions = knownHeaderLength + (1:numIndexBits);
+    % Positions of all CODEBOOK-CODED burst-index bits.
+    indexBitPositions = knownHeaderLength + (1:numProtectedIndexBits);
     % Final LLR matrix.
     % IMPORTANT:
-    % columns of this matrix will correspond to the ACTUAL transmitted
-    % burst identifiers, not to detection order.
+    % columns of this matrix will correspond to the ACTUAL chronologically 
+    % transmitted burst identifiers, not to detection order.
     rxFramedBurstsPaddedLLR = zeros(symbolsPerBurst * bitsPerSymbol, numBursts);
     % Final burst detection vector indexed by the true burst identifier.
+    % it is simply the chronologically reordered version of: 'burstDetected'
+    % it will substitute it!
     burstDetectedReordered = false(numBursts,1);
 
+    % Since the metrics will compare 'rxEqualizedBursts' with 'modulatedBursts'
+    % we should reorder some of them with the following 3 arrays that will
+    % substitute their original related ones once reordered after the following cycle
+    rxEqualizedBurstsReordered = zeros(size(rxEqualizedBursts)); % for reordered metrics
+    rxSCFDEBurstsReordered = zeros(size(rxSCFDEBursts));         % for reordered metrics
+    H_est_burstsReordered = zeros(size(H_est_bursts));           % for reordered metrics
+
+    % whether at low SNR two detections declare the same ID, we take 
+    % advantage of the LLR reliability:
+    bestIndexReliability = -inf(numBursts,1);
+    % main cycle for reordering the bursts
     for detectionIdx = 1:numBursts
         % Skip missing detections.
         if ~burstDetected(detectionIdx)
             continue; % skip to the following detection
+            % Erased burst --> leave all LLRs equal to zero
         end    
         % LLRs associated with this detected burst.
         currentBurstLLR = rxFramedBurstsPaddedLLR_detected(:,detectionIdx);    
-        % Extract only burst-index LLRs.
-        indexLLR = currentBurstLLR(indexBitPositions);    
-        % MATLAB pskdemod convention used in this receiver:
-        % positive LLR -> bit 0
-        % negative LLR -> bit 1
-        % Therefore hard decision:
-        indexBitsHard = indexLLR < 0; % element by element outputs a 
-        % boolean value: true --> 1; false --> 0;
-        % Convert binary identifier back to integer.
-        % TX transmitted:
-        %     de2bi(k-1,...)
-        % therefore here we recover k-1 and then add 1.
-        decodedZeroBasedIndex = bi2de(indexBitsHard.', 'left-msb');    
-        decodedBurstIndex = decodedZeroBasedIndex + 1;    
-        % Diagnostic storage.
-        detectedBurstIndex(detectionIdx) = decodedBurstIndex;
+        % Extract the LLRs associated with the coded burst identifier.
+        protectedIndexLLR = currentBurstLLR(indexBitPositions);
+        % Soft metric for every possible burst identifier.
+        % MATLAB convention:
+        %   positive LLR -> bit 0 more likely
+        %   negative LLR -> bit 1 more likely
+        % Therefore:
+        %   code bit 0 -> +LLR contribution
+        %   code bit 1 -> -LLR contribution
+        indexScores = zeros(numBursts,1);
+        for candidateIdx = 1:numBursts
+            candidateCodeword = burstIndexCodebook(candidateIdx,:).';        
+            bipolarCodeword = 1 - 2*candidateCodeword;     
+            % comparison with the all the codewords and the index extracted 
+            % from the burst
+            indexScores(candidateIdx) = sum(bipolarCodeword .* protectedIndexLLR);        
+        end        
+        % Select the codeword with the largest soft metric.
+        [~, decodedBurstIndex] = max(indexScores);
+        % Reliability = distance between the best and second-best
+        % codeword metrics.
+        sortedScores = sort(indexScores, 'descend');
+        indexReliability = sortedScores(1) - sortedScores(2);
         % Validate decoded identifier.
         if decodedBurstIndex < 1 || decodedBurstIndex > numBursts    
-            % Invalid identifier.
+        %    % Invalid identifier.
             continue; % skip to the following burst
         end    
+        % If another detected burst already claimed this identifier,
+        % retain the one whose index bits are more reliable.
+        if indexReliability <= bestIndexReliability(decodedBurstIndex)        
+            continue;        
+        end    
+        bestIndexReliability(decodedBurstIndex) = indexReliability;
         % Put this received frame in its TRUE transmitted position.
         rxFramedBurstsPaddedLLR(:,decodedBurstIndex) = currentBurstLLR;    
         burstDetectedReordered(decodedBurstIndex) = true;
+        rxEqualizedBurstsReordered(:,decodedBurstIndex) = ... 
+        rxEqualizedBursts(:,detectionIdx);  % for reordered metrics
+        rxSCFDEBurstsReordered(:,decodedBurstIndex) = ...    
+        rxSCFDEBursts(:,detectionIdx); % for reordered metrics        
+        H_est_burstsReordered(:,decodedBurstIndex) = ...      
+            H_est_bursts(:,detectionIdx); % for reordered metrics
     end
-
-    % From this point onward burstDetected is indexed according to the
+    
+    % From this point onward 'burstDetected' is indexed according to the
     % transmitted burst identifier rather than acquisition/detection order.
-    burstDetected = burstDetectedReordered;
+    burstDetected = burstDetectedReordered; 
+    rxEqualizedBursts = rxEqualizedBurstsReordered; % for reordered metrics
+    rxSCFDEBursts = rxSCFDEBurstsReordered;         % for reordered metrics
+    H_est_bursts = H_est_burstsReordered;           % for reordered metrics
+
 
     % Remove 8-PSK padding
     rxFramedBurstsLLR = rxFramedBurstsPaddedLLR(1:end-numPadBits8PSK, :);
@@ -779,7 +847,7 @@ function [errMax, ...
     % Recover encoded packet from bursts
     headerLength = length(syncReference) + ...
                    length(phaseReference) + ...
-                   numIndexBits;
+                   numProtectedIndexBits;
     %remove headers
     rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
     % stack into column

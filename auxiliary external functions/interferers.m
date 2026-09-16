@@ -25,7 +25,8 @@ function interferer_waveform = interferers( ...
                                 symbolRate, ...
                                 samplesPerSymbol, ...
                                 Fs, ...
-                                tunerDelay_s ...
+                                tunerDelay_s, ...
+                                dutyCycle ...
                                 )
     
     % initialize the final interferer_waveform
@@ -78,21 +79,82 @@ function interferer_waveform = interferers( ...
             1);
         carrierForBurst = carrierFrequencies(frequencyChannels).';
        
-        
-        tunerDelayPerBurst = zeros(numBursts,1); 
-        startTimes = zeros(numBursts,1); 
-        for k = 2:numBursts
-            if frequencyChannels(k) ~= frequencyChannels(k-1)
-                tunerDelayPerBurst(k) = tunerDelay_s;   
-            else
-                tunerDelayPerBurst(k) = 0;
+        %% Duty Cycle + Tuner Delay + Pseudo-Random Burst Timing
+        if dutyCycle == 1
+            tunerDelayPerBurst = zeros(numBursts,1); 
+            startTimes = zeros(numBursts,1); 
+            for k = 2:numBursts
+                if frequencyChannels(k) ~= frequencyChannels(k-1)
+                    tunerDelayPerBurst(k) = tunerDelay_s;   
+                else
+                    tunerDelayPerBurst(k) = 0;
+                end
+                % cumulative!
+                startTimes(k) = startTimes(k-1) ...
+                              + burstTxTime ...
+                              + tunerDelayPerBurst(k);
             end
-            % cumulative!
-            startTimes(k) = startTimes(k-1) ...
-                          + burstTxTime ...
-                          + tunerDelayPerBurst(k);
-        end
+            randomListeningIntervals = 0;
+            
+        else % dutyCycle < 1
+
+            % Per-burst tuner delay.
+            % tunerDelayPerBurst(k) is the delay required BEFORE burst k if the
+            % carrier changes with respect to burst k-1.
+            tunerDelayPerBurst = zeros(numBursts,1);   
+            for k = 2:numBursts    
+                if frequencyChannels(k) ~= frequencyChannels(k-1)
+                    tunerDelayPerBurst(k) = tunerDelay_s;
+                else
+                    tunerDelayPerBurst(k) = 0;
+                end    
+            end
+            
+            % Total time during which the node is effectively transmitting.
+            totalTxTime = numBursts * burstTxTime;    
+            % Total observation time required by the desired duty cycle.
+            totalTimeDutyCycle = totalTxTime / dutyCycle;    
+            % Total non-transmission time available.
+            totalNonTxTime = totalTimeDutyCycle - totalTxTime;    
+            % Part of the non-TX time necessarily occupied by tuner switching.
+            totalTunerDelay = sum(tunerDelayPerBurst);
+            
+            % Check that the requested duty cycle is physically compatible with
+            % the required tuner delays.
+            if totalTunerDelay > totalNonTxTime
+                error(['Requested dutyCycle is too high to accommodate the ' ...
+                       'required tuner delays.']);
+            end
+            
+            % Remaining non-TX time that can be distributed as random listening.
+            totalRandomListeningTime = totalNonTxTime - totalTunerDelay;
+            
+            % Randomly distribute the available listening time.
+            % There are numBursts+1 possible listening intervals:
+            % listen | B1 | listen+tuner | B2 | ... | listen+tuner | BN | listen
+            randomWeights = rand(numBursts+1,1); % #numBursts+1 positive random 
+            % numbers between (0;1); we take #numBursts+1 intervals since there is
+            % a small RX interval before the transmission of the very first burst
+            randomListeningIntervals = totalRandomListeningTime * ...
+                randomWeights / sum(randomWeights); % normalization to 1 --> 
+            % --> sum(randomListeningIntervals) = totalRandomListeningTime.
+            % Construct the burst start times.
+            startTimes = zeros(numBursts,1); % starttime TX cumulative
+            % Initial random listening interval before the first burst.
+            startTimes(1) = randomListeningIntervals(1);    
+            for k = 2:numBursts
+            
+                startTimes(k) = ...
+                    startTimes(k-1) ...                  % previous burst start
+                    + burstTxTime ...                    % previous burst duration
+                    + tunerDelayPerBurst(k) ...          % possible frequency switching
+                    + randomListeningIntervals(k);       % random listening time
+            
+            end    
     
+        end         
+        
+        % End time of each burst.
         endTimes = startTimes + burstTxTime; % array
 
         % ASSUMPTION!
@@ -111,7 +173,7 @@ function interferer_waveform = interferers( ...
             'FilterSpanInSymbols',filterSpan, ...
             'OutputSamplesPerSymbol',samplesPerSymbol); % how many samples it 
         % outputs per symbol the RRC
-        totalTime = max(endTimes); % final time for transmitting the whole packet 
+        totalTime = max(endTimes) + randomListeningIntervals(end); % final time for transmitting the whole packet 
         % (last burst)
         extraSymbols = filterSpan; % Extra zero symbols appended to flush the TX/RX 
         % pulse-shaping filters.

@@ -19,7 +19,8 @@ function [packet, ... % original packet with random bits
           carrierForBurst, ... 
           burstTxTime, ...
           startTimes, ... % per burst
-          txSignal ... % FINAL TRANSMITTED SIGNAL
+          txSignal, ... % FINAL TRANSMITTED SIGNAL
+          numProtectedIndexBits ...
          ] = transmitter(...
           packetLength, ...
           numBursts, ... % how many bursts a packet is divided into
@@ -34,7 +35,8 @@ function [packet, ... % original packet with random bits
           samplesPerSymbol, ...
           Fs, ... % sampling frequency
           cpLength, ... % Cyclic Prefix for SCFDE
-          tunerDelay_s ... % tuner delay for carriers
+          tunerDelay_s, ... % tuner delay for carriers
+          dutyCycle ...
           )
  
 
@@ -56,7 +58,6 @@ function [packet, ... % original packet with random bits
     % Coding
     encodedPacket = turboEnc(packet);
     
-    
     %% Divide the Original Packet into Bursts
     % ASSUMPTION! we assume the number of bits per packet fixed, hence packet
     % length fixed
@@ -72,22 +73,29 @@ function [packet, ... % original packet with random bits
     bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
     
     
-    %% 48 sync reference bits, 48 phase reference bits, 5 indexing bits
-    
-    % integer superior part of the log2 --> add minimum number of indexing bits
-    numIndexBits = ceil(log2(numBursts));   % 5 bits for indexing 28 bursts
+    %% 48 sync reference bits, 48 phase reference bits, X indexing bits 
+    % Burst index codebook
+    % Number of bits physically transmitted for the burst identifier.
+    numProtectedIndexBits = 15;
+    % Generate the common TX/RX burst-index codebook.
+    burstIndexCodebook = generateBurstIndexCodebook(numBursts, ...
+                                                    numProtectedIndexBits);
+
     % matrix of zeros
-    framedBursts = zeros(bitsPerBurst + length(syncReference) + ...
-                            length(phaseReference) + numIndexBits, ... 
-                            numBursts);
+    % sync | phase reference | burst index | payload
+    framedBursts = zeros(bitsPerBurst + ...
+                         length(syncReference) + ...
+                         length(phaseReference) + ...
+                         numProtectedIndexBits, ... 
+                         numBursts);
     for k = 1:numBursts
-        % decimal to binary, with numIndexBits as #bits of result, most
-        % significant bit is put left (used in TLC), then we transpose it: .'
-        burstIndexBits = de2bi(k-1, numIndexBits, 'left-msb').';
+        % Row k of the codebook represents burst identifier k-1.
+        protectedBurstIndexBits = burstIndexCodebook(k,:).';
+        % frame structure
         framedBursts(:,k) = [ ... % take all rows of cloumn k vertical concatenation of three vectors
-            syncReference;        % 48 bit
-            phaseReference;       % 48 bit
-            burstIndexBits;       % 5 bit: burst identifier
+            syncReference;           % 48 bit
+            phaseReference;          % 48 bit
+            protectedBurstIndexBits; % 15 bit: burst identifier
             bursts(:,k)           % 144 bit coded, from column k
         ];
     end
@@ -154,48 +162,101 @@ function [packet, ... % original packet with random bits
     % real physical time for transmitting a burst, because we take into
     % account also the tails of the RRC
     burstTxTime = (symbolsPerBurstWithCP + filterSpan)/ symbolRate; % seconds
-    % fundamental check of the logic: burstTxTime / slotDuration = dutyCycle
+    % Duty-cycle validity check.
+    if dutyCycle <= 0 || dutyCycle > 1
+        error('dutyCycle must be in the interval (0,1].');
+    end
     % Frequency channels
     channelBandwidth = (fMax - fMin) / numFrequencyChannels;
     carrierFrequencies = fMin + channelBandwidth/2 + ...
-        (0:numFrequencyChannels-1)*channelBandwidth; % list comprehension (0:i)
-    
-    % Random offset inside each slot, without taking into account RRC tails in
-    % which a burst could be transmitted even in the final edge of its timeSlot
-    % maxOffset = slotDuration - burstTxTime;
-    % The below definition of maxOffset better cope with the tails introduced 
-    % by the Pulse Shaping Filters.
-     
-    % I have defined it here, even though the RRC is implemented in the next
-    % block. But it is essential to define it here in order to prevent the
-    % transmission of a burst to create tails that exceed their own allocated 
-    % time slot.
-        
+        (0:numFrequencyChannels-1)*channelBandwidth; % list comprehension (0:i)        
     % array of values between 1 and #numFrequencyChannels of length #numBursts
     frequencyChannels = randi( ...
         [1 numFrequencyChannels], ...
         numBursts, ...
         1);
     carrierForBurst = carrierFrequencies(frequencyChannels).';
-    
-    % start times defintion and tuner delay if two consecutive bursts are 
-    % sent on different carriers
-    tunerDelayPerBurst = zeros(numBursts,1); % Per-burst tuner delay
-    startTimes = zeros(numBursts,1); % start TX cumulative
-    for k = 2:numBursts
-        if frequencyChannels(k) ~= frequencyChannels(k-1)
-            tunerDelayPerBurst(k) = tunerDelay_s;   % 1 us
-        else
-            tunerDelayPerBurst(k) = 0;
+
+    %% Duty Cycle + Tuner Delay + Pseudo-Random Burst Timing
+    if dutyCycle == 1
+
+        % start times defintion and tuner delay if two consecutive bursts are 
+        % sent on different carriers
+        tunerDelayPerBurst = zeros(numBursts,1); % Per-burst tuner delay
+        startTimes = zeros(numBursts,1); % start TX cumulative
+        for k = 2:numBursts
+            if frequencyChannels(k) ~= frequencyChannels(k-1)
+                tunerDelayPerBurst(k) = tunerDelay_s;   % 1 us
+            else
+                tunerDelayPerBurst(k) = 0;
+            end
+            % cumulative!
+            startTimes(k) = startTimes(k-1) ...
+                          + burstTxTime ...
+                          + tunerDelayPerBurst(k);            
         end
-        % cumulative!
-        startTimes(k) = startTimes(k-1) ...
-                      + burstTxTime ...
-                      + tunerDelayPerBurst(k);
+        randomListeningIntervals = 0;
+    
+    else % dutyCycle < 1
+
+        % Per-burst tuner delay.
+        % tunerDelayPerBurst(k) is the delay required BEFORE burst k if the
+        % carrier changes with respect to burst k-1.
+        tunerDelayPerBurst = zeros(numBursts,1);   
+        for k = 2:numBursts    
+            if frequencyChannels(k) ~= frequencyChannels(k-1)
+                tunerDelayPerBurst(k) = tunerDelay_s;
+            else
+                tunerDelayPerBurst(k) = 0;
+            end    
+        end
+        
+        % Total time during which the node is effectively transmitting.
+        totalTxTime = numBursts * burstTxTime;    
+        % Total observation time required by the desired duty cycle.
+        totalTimeDutyCycle = totalTxTime / dutyCycle;    
+        % Total non-transmission time available.
+        totalNonTxTime = totalTimeDutyCycle - totalTxTime;    
+        % Part of the non-TX time necessarily occupied by tuner switching.
+        totalTunerDelay = sum(tunerDelayPerBurst);
+        
+        % Check that the requested duty cycle is physically compatible with
+        % the required tuner delays.
+        if totalTunerDelay > totalNonTxTime
+            error(['Requested dutyCycle is too high to accommodate the ' ...
+                   'required tuner delays.']);
+        end
+        
+        % Remaining non-TX time that can be distributed as random listening.
+        totalRandomListeningTime = totalNonTxTime - totalTunerDelay;
+        
+        % Randomly distribute the available listening time.
+        % There are numBursts+1 possible listening intervals:
+        % listen | B1 | listen+tuner | B2 | ... | listen+tuner | BN | listen
+        randomWeights = rand(numBursts+1,1); % #numBursts+1 positive random 
+        % numbers between (0;1); we take #numBursts+1 intervals since there is
+        % a small RX interval before the transmission of the very first burst
+        randomListeningIntervals = totalRandomListeningTime * ...
+            randomWeights / sum(randomWeights); % normalization to 1 --> 
+        % --> sum(randomListeningIntervals) = totalRandomListeningTime.
+        % Construct the burst start times.
+        startTimes = zeros(numBursts,1); % starttime TX cumulative
+        % Initial random listening interval before the first burst.
+        startTimes(1) = randomListeningIntervals(1);    
+        for k = 2:numBursts
+        
+            startTimes(k) = ...
+                startTimes(k-1) ...                  % previous burst start
+                + burstTxTime ...                    % previous burst duration
+                + tunerDelayPerBurst(k) ...          % possible frequency switching
+                + randomListeningIntervals(k);       % random listening time
+        
+        end    
+
     end
 
-    endTimes = startTimes + burstTxTime; % array
-    
+    % End time of each burst.
+    endTimes = startTimes + burstTxTime; % array    
     
     %% Final transmitted EQUIVALENT-BASEBAND signal with Pulse Shape Filter RRC
     % NOTE! Due to Nyquist and thanks to the fact that we are simulating in
@@ -227,7 +288,9 @@ function [packet, ... % original packet with random bits
         'FilterSpanInSymbols',filterSpan, ...
         'OutputSamplesPerSymbol',samplesPerSymbol); % how many samples it 
     % outputs per symbol the RRC
-    totalTime = max(endTimes); % final time for transmitting the whole packet 
+    % Complete observation interval:
+    % includes also the final random listening interval.
+    totalTime = endTimes(end) + randomListeningIntervals(end);
     % (last burst)
     tailSamples = filterSpan * samplesPerSymbol; % tail extention in samples 
     numSamplesTotal = ceil(totalTime * Fs) + tailSamples + 1; % +1 for safety 
