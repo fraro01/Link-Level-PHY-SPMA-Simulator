@@ -3,6 +3,8 @@
 % this is based on the Hamming distance, because for few indexing bits does
 % not ìmake any sense the computational overload of turbo coders...
 
+% with a Monte Carlo search of the codebook we maximize the minimum Hamming
+% distance
 
 
 function codebook = generateBurstIndexCodebook(numBursts, codewordLength)

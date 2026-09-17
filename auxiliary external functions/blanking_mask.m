@@ -17,7 +17,11 @@
 % ASSUMPTION! we blank only the actual time in which the RX is actively
 % transmitting.
 
-function blankingMask = blanking_mask(rxSignal, blankingPercentage, dutyCycle)
+function blankingMask = blanking_mask(rxSignal, ...
+                                      blankingPercentage, ...
+                                      dutyCycle, ...
+                                      burstDurationSamples)
+
     % blankingPercentage is expressed from 0 to 1.
     % Example: blankingPercentage = 0.25 means 25% blanking.
 
@@ -50,17 +54,33 @@ function blankingMask = blanking_mask(rxSignal, blankingPercentage, dutyCycle)
             endIndex = startIndex + numBlankedSamples - 1;    
             % Insert the consecutive block of zeros
             blankingMask(startIndex:endIndex) = 0;    
-        else    
-            % With dutyCycle < 1, distribute the blanking randomly
-            % throughout the complete received signal.    
-            % randperm returns numBlankedSamples different random indices
-            % between 1 and numSamples.
-            blankedIndices = randperm(numSamples, numBlankedSamples);    
-            % Blank exactly the selected samples.
-            blankingMask(blankedIndices) = 0;    
-        end    
+        else
+            % Minimum blanking duration, 0.5 --> half of a burst
+            minBlankingBlockSamples = round(0.5 * burstDurationSamples);            
+            % Number of blocks
+            numBlocks = floor(numBlankedSamples / minBlankingBlockSamples);
+            numBlocks = max(1, numBlocks);    % at least one block        
+            % Length of each block
+            blockLength = floor(numBlankedSamples / numBlocks);            
+            % Divide the entire signal into numBlocks regions
+            regionLength = floor(numSamples / numBlocks);            
+            for b = 1:numBlocks            
+                % Limits of the region assigned to this block
+                regionStart = (b-1) * regionLength + 1;            
+                if b < numBlocks
+                    regionEnd = b * regionLength;
+                else
+                    regionEnd = numSamples;
+                end            
+                % Random start inside the assigned region
+                maxStartIndex = regionEnd - blockLength + 1;            
+                startIndex = randi([regionStart, maxStartIndex]);
+                endIndex = startIndex + blockLength - 1;            
+                % Apply blanking
+                blankingMask(startIndex:endIndex) = 0;            
+            end        
+        end
     end
-   
 end
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

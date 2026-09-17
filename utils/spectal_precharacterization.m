@@ -112,6 +112,7 @@ spectralWidths_Hz = zeros(size(referenceLevels_dBc));
 % minimum of the absolute values of the frequencies
 [~,centerIndex] = min(abs(frequencyAxis_Hz)); % ~ ignores the first value, 
 % instead take just the position
+%{%}
 for k = 1:length(referenceLevels_dBc)
     level = referenceLevels_dBc(k);
     % find the last sample on the left side of the spectrum that is still

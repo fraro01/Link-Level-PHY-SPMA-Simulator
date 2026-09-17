@@ -23,13 +23,13 @@ addpath('utils') % for testing functions
 tunerDelay_s = 1e-6;
 % Set the length of the packet in bits
 packetLength = 1331; % bits
-dutyCycle = 1; % percentage TX/RX
+dutyCycle = 0.1; % percentage TX/RX
 numBursts = 28;
 % the sync and the reference bits remain fixed for all bursts
 rng(1); % fixed seed to keep fixed only the two random variables below
 syncReference  = randi([0 1], 48, 1);   % 48 synchronization bits
 phaseReference = randi([0 1], 48, 1);   % 48 phase reference bits
-rng(4); % set 'shuffle' to keep it random at each iteration, otherwise  
+rng('shuffle'); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
@@ -52,12 +52,12 @@ cpLength = 10; % TODO! Must exceed the maximum channel delay in symbols
 numInterferers = 0; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
-blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
+blankingPercentage = 0.8; % percentage with respect to the time 'txSignal' 
 % representing the time occupied by the RX node while is transmitting
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 33; % simulation cycles
+metrics.packets = 1; % simulation cycles
 % for storing values we use a MATLAB 'Structure'
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
@@ -142,7 +142,8 @@ for i = 1:metrics.packets
         numInterferers, ...
         blankingPercentage, ...
         tunerDelay_s, ...
-        dutyCycle ...
+        dutyCycle, ...
+        burstTxTime ...
         );
     
     %% RECEIVER
@@ -271,9 +272,9 @@ fprintf('Total final errored bits from original packets = %d\n', ...
 fprintf('-------------------------------------------------------------\n'); 
 fprintf('Signal-to-Interference-plus-Noise Ratio   = %.2f dB\n', ...
                             metrics_calculated.SINR);
-fprintf('Error Vector Magnitude percentage = %.2f%%\n', ...
+fprintf('Error Vector Magnitude percentage         = %.2f%%\n', ...
                             metrics_calculated.EVM_pct);
-fprintf('Error Vector Magnitude decibels   = %.2f dB\n', ...
+fprintf('Error Vector Magnitude decibels           = %.2f dB\n', ...
                             metrics_calculated.EVM_dB);
 fprintf('E_b/N_0 linear                            = %.2f\n', ...
     metrics_calculated.EbN0_linear);

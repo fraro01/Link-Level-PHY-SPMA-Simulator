@@ -310,11 +310,7 @@ function [errMax, ...
                     syncDetectionThreshold * usableFraction;    
             end
 
-        end
-        
-        % for the 'metricsPlots'
-        syncMetricByChannel{ch} = syncMetric;
-        syncThresholdByChannel{ch} = syncThresholdCandidate;
+        end      
         
     %% 3. NORMALIZED DETECTION SCORE
         % Since every candidate has its own blanking-compensated threshold,
@@ -330,6 +326,11 @@ function [errMax, ...
         detectionScore(validCandidates) = ...
             syncMetric(validCandidates) ./ ... % element-wise, since it is directly with the arrays
             syncThresholdCandidate(validCandidates);
+
+        % for the 'metricsPlots'
+        syncMetricByChannel{ch} = detectionScore;  % syncMetric;
+        syncThresholdByChannel{ch} = syncThresholdCandidate;
+
         
     %% 4. FIND ALL PREAMBLE PEAKS ON THIS FREQUENCY CHANNEL
         % Two detections belonging to the same physical burst must not be
