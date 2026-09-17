@@ -1,7 +1,7 @@
 % function for generating the codeword for the 5 indexing bits, in order to
 % avoid a turbo coding scheme for just 5 indexing bits!
 % this is based on the Hamming distance, because for few indexing bits does
-% not ìmake any sense the computational overload of turbo coders...
+% not make any sense the computational overload of turbo coders...
 
 % with a Monte Carlo search of the codebook we maximize the minimum Hamming
 % distance

@@ -37,7 +37,7 @@ function [rxOut, vettore] = agc_model(rxIn, Fs)
     % how often the AGC controller observes the time slot, estimates the 
     % level, calculates the error, updates the gain. it's the 
     % discretization of the AGC clock
-    updatePeriod = max(1/Fs, 1e-12); % seconds. AGC update period. NOTE! you should  
+    updatePeriod = max(1e-10, 1e-12); % seconds. AGC update period. NOTE! you should  
     % not go below: 1/Fs s, in the next code line there is the reason why! 
     % Number of samples contained in one AGC update window
     samplesPerUpdate = max(1, round(updatePeriod * Fs));
