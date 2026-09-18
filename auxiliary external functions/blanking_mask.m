@@ -15,7 +15,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % ASSUMPTION! we blank only the actual time in which the RX is actively
-% transmitting.random receiver erasures occupying X% of observation time
+% transmitting. Random receiver erasures occupying X% of observation time
 
 function blankingMask = blanking_mask(rxSignal, ...
                                       blankingPercentage, ...

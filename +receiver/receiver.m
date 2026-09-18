@@ -39,7 +39,9 @@ function [errMax, ...
                                     show_metrics_plots, ...
                                     i, ...
                                     numProtectedIndexBits, ...
-                                    burstIndexCodebook ... % Burst-index codebook configuration, RX knows the codebook, but NOT which burst will arrive when.
+                                    burstIndexCodebook, ... % Burst-index codebook configuration, RX knows the codebook, but NOT which burst will arrive when.
+                                    delay_max, ...
+                                    channelEstMargin ...
                                     )
 
     %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
@@ -577,6 +579,8 @@ function [errMax, ...
 
     %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
     %% SC-FDE Demodulation with MMSE Equalization
+    % NOTE! this is a standard symbol-spaced channel estimation and 
+    % equalization. Not fractionally-spaced
     N = symbolsPerBurst;
     % Known pilot bits available in each burst
     knownPilotBits = [syncReference; phaseReference];
@@ -592,12 +596,14 @@ function [errMax, ...
     % by doing so you will notice a strong decrease in numErrors8PSK even with
     % higher AWGN.
     % Length ESTimate
-    % TODO! teak 'Lest'
-    Lest = 3; % length of the discrete impulsive response we want to estimate. 
-    % it represents #Lest taps at symbols level, hence we estimate the channel 
-    % memory length in symbols, hence it is totally different from what we did 
-    % in the Channel implementation before the RRC RX. Indeed we are doing this
-    % after the RRC RX
+    symbolPeriod = 1 / symbolRate; % duration in seconds of a symbol
+    Lest = delay_max/symbolPeriod + 1 + channelEstMargin; % length of the 
+    % discrete impulsive response we want to estimate. It is the number of 
+    % coefficients/taps of the DISCRETE EQUIVALENT CHANNEL the RX assumes 
+    % that must estimate. It represents #Lest taps at symbols level, hence 
+    % we estimate the channel memory length in symbols, hence it is totally 
+    % different from what we did in the Channel implementation before the 
+    % RRC RX. Indeed we are doing this after the RRC RX
     
     rxEqualizedBursts = zeros(symbolsPerBurst, numBursts); % equalized bursts
     H_est_bursts = zeros(N, numBursts); % channel estimation in frequency

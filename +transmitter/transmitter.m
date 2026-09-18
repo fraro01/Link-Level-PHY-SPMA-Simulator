@@ -48,7 +48,7 @@ function [packet, ... % original packet with random bits
     % turbo coding    
     
     %% Turbo Coding
-    % TODO! add trellis and numeiterations
+    % I could add trellis and numeiterations
     % Constituent convolutional code: rate 1/3
     % trellis = poly2trellis(4, [13 15 17], 13);
     % Interleaver turbo

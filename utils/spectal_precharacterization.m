@@ -30,7 +30,7 @@ clc;
 % rolloff = 0.35; % [0;1]
 % filterSpan = 10; % in symbols
  channelBandwidth = 13e6;
-% symbolRate = channelBandwidth / (1 + rolloff); % NOTE! this with filterSpan 
+% symbolRate = channelBandwidth / (1 + rolloff); % NOTE! this, with filterSpan 
 % are the two things that slightly enlarge the variable: 'burstTxTime'
 % Fs = symbolRate * samplesPerSymbol;
 
