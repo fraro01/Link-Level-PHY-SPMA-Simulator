@@ -336,6 +336,10 @@ function [errMax, ...
         minPeakDistanceSamples = ...
             max(1, round(0.8 * symbolsPerBurstWithCP * samplesPerSymbol));
     
+        % we find all the possible peaks that overcome the threshold in the 
+        % current channel, for sure they could be more than 28 even just 
+        % for A channel! But then in section '6.', we will take only the 
+        % #numBursts with the highest score! among all the channels.
         [peakScores, peakCandidateIndices] = ...
             findpeaks( ...
                 detectionScore, ...
@@ -597,7 +601,7 @@ function [errMax, ...
     % higher AWGN.
     % Length ESTimate
     symbolPeriod = 1 / symbolRate; % duration in seconds of a symbol
-    Lest = delay_max/symbolPeriod + 1 + channelEstMargin; % length of the 
+    Lest = ceil(delay_max/symbolPeriod) + 1 + channelEstMargin; % length of the 
     % discrete impulsive response we want to estimate. It is the number of 
     % coefficients/taps of the DISCRETE EQUIVALENT CHANNEL the RX assumes 
     % that must estimate. It represents #Lest taps at symbols level, hence 

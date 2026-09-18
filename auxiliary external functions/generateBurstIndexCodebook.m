@@ -11,7 +11,7 @@ function codebook = generateBurstIndexCodebook(numBursts, codewordLength)
 
     % Fixed seed: TX and RX must generate exactly the same codebook.
     previousRng = rng;
-    rng(12345);
+    rng(42);
 
     % Number of random candidate codebooks to test.
     numTrials = 5000;

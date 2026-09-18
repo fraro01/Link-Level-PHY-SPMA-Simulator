@@ -63,7 +63,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 50; % simulation cycles 33
+metrics.packets = 1; % simulation cycles 33
 % for storing values we use a MATLAB 'Structure'
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
@@ -157,7 +157,7 @@ for i = 1:metrics.packets
     
     % checking assertion in case of too low 'cpLength'
     minCpLength = ceil(delay_max/(1/symbolRate));
-    assert(cpLength > minCpLength, ...
+    assert(cpLength >= minCpLength, ...
     ['Cyclic prefix too short: cpLength = %d symbols, ' ...
      'but at least %d symbols are required by the maximum channel delay.'], ...
     cpLength, minCpLength);

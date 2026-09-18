@@ -37,7 +37,7 @@ function [rxOut, vettore] = agc_model(rxIn, Fs)
     % how often the AGC controller observes the time slot, estimates the 
     % level, calculates the error, updates the gain. it's the 
     % discretization of the AGC clock
-    updatePeriod = max(1e-10, 1e-12); % seconds. AGC update period. NOTE! you should  
+    updatePeriod = max(1e-7, 1/Fs); % seconds. AGC update period. NOTE! you should  
     % not go below: 1/Fs s, in the next code line there is the reason why! 
     % Number of samples contained in one AGC update window
     samplesPerUpdate = max(1, round(updatePeriod * Fs));
@@ -81,9 +81,12 @@ function [rxOut, vettore] = agc_model(rxIn, Fs)
 
         % TODO! BASED ON THE POWER LEVEL, SET A POSSIBLE "IDLE" STATE?
         % 'continue' MAY EXIT THE FOR CYCLE
+        % based on the 'vettore' that you get from the 'main.m', plot it,
+        % and then set the proper threshold of the follwing IDLE state
+        % accordingly.
         vettore = [vettore; sqrt(mean(abs(x).^2))];
     %{%}
-        if sqrt(mean(abs(x).^2)) <= 0.1 % NOTE! this strongly improves EVM 
+        if sqrt(mean(abs(x).^2)) <= 0.05 % NOTE! this strongly improves EVM 
             rxOut(idx) = 0; % if no transmission is found set the level to zero!
             continue
         end

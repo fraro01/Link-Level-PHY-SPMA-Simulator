@@ -321,6 +321,7 @@ function [blankingMask, ...
     % noise of the antenna at 290 K other than the one of the RX device.
     % Add antenna and receiver thermal noise at the receiver input.
     rxSignalAtAntenna = thermalNoiseChannel(rxSignalWithInterference);
+    % rxSignalAtAntenna = rxSignalWithInterference;
     
     % check 10*log10(mean(abs(rxSignalAtAntenna).^2))
     %% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but
