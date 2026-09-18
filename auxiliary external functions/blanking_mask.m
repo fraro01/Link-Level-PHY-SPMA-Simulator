@@ -41,7 +41,8 @@ function blankingMask = blanking_mask(rxSignal, ...
     blankingMask = ones(size(rxSignal)); % the length must be the same of TX!
 
     % If there are samples to blank
-    if numBlankedSamples > 0    
+    if numBlankedSamples > 0
+        %{
         if dutyCycle == 1    
             % With dutyCycle = 1, keep the original behavior:
             % all blanked samples belong to one consecutive block.    
@@ -55,6 +56,7 @@ function blankingMask = blanking_mask(rxSignal, ...
             % Insert the consecutive block of zeros
             blankingMask(startIndex:endIndex) = 0;    
         else
+        %}
             % Minimum blanking duration, 0.5 --> half of a burst
             minBlankingBlockSamples = round(1.5 * burstDurationSamples);            
             % Number of blocks
@@ -79,7 +81,7 @@ function blankingMask = blanking_mask(rxSignal, ...
                 % Apply blanking
                 blankingMask(startIndex:endIndex) = 0;            
             end        
-        end
+       % end
     end
 end
 
