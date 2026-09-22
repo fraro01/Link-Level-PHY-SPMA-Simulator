@@ -169,8 +169,8 @@ function [blankingMask, ...
     % Average relative power of the paths relative to the strongest path, 
     % LOS/echo paths [dB]
     averagePathGains_dB = [0, ... % 0 gain with respect to reference (itself is taken as reference indeed it makes sense zero)
-                           -12, ... % with -12 dB --> the path has 6.31% of the power of the first path, or equivalently a 16th
-                           -18]; % with -18 dB --> the path has 1.58% of the power of the first path
+                          -12, ... % with -12 dB --> the path has 6.31% of the power of the first path, or equivalently a 16th
+                          -18]; % with -18 dB --> the path has 1.58% of the power of the first path
     % First path is Rician with K>0 (component specular/LOS is dominant), other
     % paths are Rayleigh (because KFactor is supplied as a vector), with a 
     % diffuse component without LOS. 
@@ -339,7 +339,6 @@ function [blankingMask, ...
     % call the external auxiliary function for TxRxN Blanking Compensation    
     blankingMask = blanking_mask(rxSignal, ...
                                 blankingPercentage, ...
-                                dutyCycle, ...
                                 burstDurationSamples);
     % Apply local-transmit blanking
     rxSignal = rxSignal .* blankingMask; % element-wise multiplication with 1/0

@@ -19,7 +19,6 @@
 
 function blankingMask = blanking_mask(rxSignal, ...
                                       blankingPercentage, ...
-                                      dutyCycle, ...
                                       burstDurationSamples)
 
     % blankingPercentage is expressed from 0 to 1.
@@ -58,7 +57,7 @@ function blankingMask = blanking_mask(rxSignal, ...
         else
         %}
             % Minimum blanking duration, 0.5 --> half of a burst
-            minBlankingBlockSamples = round(1.5 * burstDurationSamples);            
+            minBlankingBlockSamples = round(1 * burstDurationSamples);            
             % Number of blocks
             numBlocks = floor(numBlankedSamples / minBlankingBlockSamples);
             numBlocks = max(1, numBlocks);    % at least one block        
@@ -66,7 +65,7 @@ function blankingMask = blanking_mask(rxSignal, ...
             blockLength = floor(numBlankedSamples / numBlocks);            
             % Divide the entire signal into numBlocks regions
             regionLength = floor(numSamples / numBlocks);            
-            for b = 1:numBlocks            
+            for b = 1:numBlocks
                 % Limits of the region assigned to this block
                 regionStart = (b-1) * regionLength + 1;            
                 if b < numBlocks

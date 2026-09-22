@@ -234,7 +234,7 @@ classdef MetricPlots
             figure;
         
             % Small window around detected correlation peak
-            halfWindow = 100;        
+            halfWindow = 250;        
             firstIdx = max(1, peakIndex - halfWindow);
             lastIdx  = min(length(syncMetric), peakIndex + halfWindow);
         
@@ -260,8 +260,8 @@ classdef MetricPlots
             xlabel('Matched-filter sample index');
             ylabel('Synchronization metric');
         
-            title(sprintf( ...
-                'Blind Synchronization - Detection %d', detectionIdx));
+            title(sprintf('Blind Synchronization - Detection %d', ...
+                detectionIdx));
 
             legend('Synchronization metric', ...
                     'Blanking-compensated threshold', ...

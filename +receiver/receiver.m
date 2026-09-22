@@ -91,13 +91,19 @@ function [errMax, ...
     % where to store the syncohronized bursts
     rxSCFDEBursts = zeros(symbolsPerBurstWithCP, numBursts);
     
-    % Set the threshold in between 0 e 1. The higher the amount of sync symbols 
-    % the higher could be set, and viceversa. e.g. with only 5 symbols --> 0.55
-    % for diagnostic purposes
-    syncDetectionThreshold = 0.275; % TODO! tweak it variable on the basis of 
-    % the Blanking Compensation!
-    % TODO! tweak the following parameter!
-    minUsableSyncFraction = 0.33; % Blanking Compensation variable threshold
+    % ADAPTIVE DETECTION THRESHOLD
+    % Number of correlation samples used to estimate the local correlation 
+    % background.
+    backgroundWindowLength = 125;    
+    % Number of correlation samples excluded around the candidate under test.
+    % This avoids contaminating the background estimate with the useful peak.
+    % if 'guardLength = 0 --> exclude ONLY the CUT (Candidate Under Test)'
+    guardLength = (10*numSyncSymbols)/32;   
+    % Number of standard deviations above the local correlation background.
+    thresholdK = 10;  
+    % Minimum usable fraction of synchronization symbols after blanking.
+    % Blanking Compensation variable threshold
+    minUsableSyncFraction = 0.33;
     % this parameter sets the minimum fraction of sync symbols not-blanked by  
     % which we can still try to recover the burst
     % (usable_sync_symbols/total_sync_symbols).
@@ -231,6 +237,8 @@ function [errMax, ...
         numBlankedSyncSymbols = zeros(numCandidates,1);
         % variable threshold for blanking compensation per candidate
         syncThresholdCandidate = zeros(numCandidates,1);
+        % Fraction of usable synchronization symbols for each candidate.
+        usableFractionCandidate = zeros(numCandidates,1);
         
         % For each possible sample q, we take:
         % q,
@@ -295,18 +303,63 @@ function [errMax, ...
                 numSyncSymbols - numBlankedSyncSymbols(candidateIdx); 
             % varibale threshold for blanking compensation
             usableFraction = numUsableSyncSymbols / numSyncSymbols;
+            % for lowering the detection threshold according to the number
+            % of symbols blanked.
+            usableFractionCandidate(candidateIdx) = usableFraction;
             % important check-point if too many symbols are blanked
             if usableFraction < minUsableSyncFraction    
-                % Reject candidate.
+                % Reject candidate, candidate cannot be used because too 
+                % much of the synchronization sequence has been blanked.
                 syncThresholdCandidate(candidateIdx) = Inf; % with 'inf' the 
                 % candidate is not valid
+            %{    
             else % calculate the variable threshold of Blanking Compens
                 % Blanking-compensated threshold.
                 syncThresholdCandidate(candidateIdx) = ...
-                    syncDetectionThreshold * usableFraction;    
+                    syncDetectionThreshold * usableFraction;   
+            %}
             end
-
         end      
+
+        % ADAPTIVE CORRELATION THRESHOLD
+        % CFAR Cell-Averaging Constant False Alarm Rate
+        halfWindow = floor(backgroundWindowLength / 2);
+        halfGuard  = floor(guardLength / 2);        
+        for candidateIdx = 1:numCandidates        
+            % Skip candidates already rejected because of excessive blanking.
+            if isinf(syncThresholdCandidate(candidateIdx))
+                continue;
+            end        
+            % Limits of the local correlation window.
+            windowStart = max(1, candidateIdx - halfWindow);
+            windowEnd   = min(numCandidates, candidateIdx + halfWindow);        
+            % Indices belonging to the local window.
+            backgroundIndices = (windowStart:windowEnd).';        
+            % Guard region around the candidate under test.
+            guardStart = max(1, candidateIdx - halfGuard);
+            guardEnd   = min(numCandidates, candidateIdx + halfGuard);        
+            % Remove the guard region from the background samples.
+            backgroundIndices( ...
+                backgroundIndices >= guardStart & ...
+                backgroundIndices <= guardEnd) = []; % remove elements from vector     
+            % Safety check.
+            if isempty(backgroundIndices)        
+                syncThresholdCandidate(candidateIdx) = Inf;
+                continue;        
+            end        
+            % Correlation samples representing the local background.
+            backgroundMetric = syncMetric(backgroundIndices);
+            % Estimate local correlation background.
+            muBackground = mean(backgroundMetric);        
+            % Estimate local correlation-background dispersion.
+            sigmaBackground = std(backgroundMetric);
+            % Adaptive detection threshold based on local correlation background.
+            backgroundThreshold = muBackground + thresholdK * sigmaBackground;            
+            % Blanking compensation.
+            usableFraction = usableFractionCandidate(candidateIdx); 
+            % Adaptive detection threshold blanknig compensated
+            syncThresholdCandidate(candidateIdx) = backgroundThreshold * usableFraction;     
+        end
         
     %% 3. NORMALIZED DETECTION SCORE
         % Since every candidate has its own blanking-compensated threshold,
@@ -466,6 +519,13 @@ function [errMax, ...
     
     
     %% 9. FEED-FORWARD CARRIER SYNCHRONIZATION (ACQUISITION)
+    % NOTE!: in literature there are plenty of articles concerning the CFO
+    % estimation in SC-FDE and its importance, e.g.: 
+    % "Are SC-FDE systems robust to CFO?, by: Ying Chen et al."
+    % Furthermore in my architecture, it is of core importantce, since a
+    % bad CFO estimation might have a catastrphic domino effect for the
+    % subsequent architecture blocks, since they are in sequence (channel 
+    % estimation, equalization)!
         %% 9.1. EXTRACT THE KNOWN CARRIER PILOTS
         receivedCarrierPilotSymbols = ... % take only the known pilots!
             rxBurstSymbols(carrierPilotIndicesInBurst);
@@ -583,14 +643,23 @@ function [errMax, ...
 
     %% PILOT-BASED Channel Estimation using Sync + Phase reference bits and 
     %% SC-FDE Demodulation with MMSE Equalization
+    % NOTE! In literature there are specific sequences that take advantage 
+    % of the autocorrelation. They try to set columns of A such that
+    % correspondent delayed versions of the training are as much as
+    % possible othogonal. In other words: a delayed copy of the training
+    % must be very different from the original training.
+    % Usuallly in order to find them we could impost a typical optimization
+    % problem of Operational Research, with the training sequences and the
+    % estimator.
+
     % NOTE! this is a standard symbol-spaced channel estimation and 
-    % equalization. Not fractionally-spaced
-    N = symbolsPerBurst;
+    % equalization. Not fractionally-spaced.
     % Known pilot bits available in each burst
     knownPilotBits = [syncReference; phaseReference];
     numPilotSymbols = floor(length(knownPilotBits)/bitsPerSymbol);
     knownPilotSymbols = modulatedBursts(1:numPilotSymbols, 1);
-    numPilotSymbols = length(knownPilotSymbols);
+    numPilotSymbols = length(knownPilotSymbols); % over-write 
+    % 'numPilotSymbols' to make sure of its length
     
     % NOTE! the pilot tones (symbols) must be >> number of taps (Lest). 
     % there are two possible ways to operate:
@@ -599,7 +668,7 @@ function [errMax, ...
     % total of 16-32 symbols.
     % by doing so you will notice a strong decrease in numErrors8PSK even with
     % higher AWGN.
-    % Length ESTimate
+    % 'Lest' stands for --> Length ESTimate
     symbolPeriod = 1 / symbolRate; % duration in seconds of a symbol
     Lest = ceil(delay_max/symbolPeriod) + 1 + channelEstMargin; % length of the 
     % discrete impulsive response we want to estimate. It is the number of 
@@ -610,9 +679,9 @@ function [errMax, ...
     % RRC RX. Indeed we are doing this after the RRC RX
     
     rxEqualizedBursts = zeros(symbolsPerBurst, numBursts); % equalized bursts
-    H_est_bursts = zeros(N, numBursts); % channel estimation in frequency
+    H_est_bursts = zeros(symbolsPerBurst, numBursts); % channel estimation in frequency
     h_est_bursts = zeros(Lest, numBursts); % channel estimation in time
-    % estimated noise variance after MMSE equalization for 8-PSK LLR demod
+    % estimated noise variance after MMSE equalization, for 8-PSK LLR demod
     noiseVarAfterEq = zeros(numBursts,1);
     for k = 1:numBursts % cycle over all bursts
         % if the current burst was not found (erased), we directly skip its
@@ -651,28 +720,35 @@ function [errMax, ...
         % estimates of the channel from our knonw pilots
         % Pilot residual after channel reconstruction, to estimate White Noise,
         % by taking advantage of the pilots, and just before the equalizer
-        % indeed! for the MMSE denominator: (σ_n)^2/(σ_x)^2
+        % indeed! for the MMSE denominator we need: (σ_n)^2/(σ_x)^2
         pilotResidual = y - A*h_hat;
         % Estimate effective noise + unmodelled interference variance
         % If: (σ_n)^2 --> 0, MMSE converges to ZF
-        noiseVarHat = mean(abs(pilotResidual).^2);
+        noiseVarHat = mean(abs(pilotResidual).^2); % if the signal has mean 
+        % value equals to zero (E(X)=0) --> Power_X = variance(X); since:
+        % Power_X = variance(X) + |mean(X)|^2. Generally speaking AWGN is
+        % modelled as: N(0, sigma_n^2), hence it has mean value = 0.
         noiseVarHat = max(noiseVarHat, 1e-12); % floor for safety
         % Symbol power (again for MMSE)
-        Px = mean(abs(knownPilotSymbols).^2);
+        Px = mean(abs(knownPilotSymbols).^2); % since the constellation we 
+        % have used has unitary energy --> Px(8-PSK_symbol) = 1;
         h_est_bursts(:,k) = h_hat; % saves the times response estimates by 
         % burst k
         % Convert time-domain channel estimate to frequency domain
-        h_hat_padded = [h_hat; zeros(N-Lest,1)];
-        H_hat = fft(h_hat_padded, N); % channel frequency response
+        h_hat_padded = [h_hat; zeros(symbolsPerBurst-Lest,1)]; % padding for FFT, we want 
+        % a total of #symbolsPerBurst frequency bins in the FFT, the reason
+        % is explained below in the row of the: 'fft(rxBurst, N)'
+        H_hat = fft(h_hat_padded, symbolsPerBurst); % channel frequency response
         H_est_bursts(:,k) = H_hat; % saves the frequency response estimates by 
         % burst k
         % SC-FDE Equalization
-        Y = fft(rxBurst, N);
+        Y = fft(rxBurst, symbolsPerBurst); % for equalization frequency-by-frequency we 
+        % need a channel estimate with the same identical frequency bins.
         % MMSE equalizaer
         W = conj(H_hat) ./ (abs(H_hat).^2 + noiseVarHat/Px);
         Xhat = W .* Y; % equalization
         % Back to time/symbol domain
-        rxBurstEqualized = ifft(Xhat, N);    
+        rxBurstEqualized = ifft(Xhat, symbolsPerBurst);  
     
         % POST-MMSE residual gain estimation using pilots (for potential 
         % ampitude gain and phase rotations on the burst)
@@ -680,8 +756,8 @@ function [errMax, ...
         rxPilotEqualized = rxBurstEqualized(1:numPilotSymbols);    
         % Estimate residual complex gain:
         % rxPilotEqualized ~= gHat * knownPilotSymbols + residual
-        % Least Sqaures estimate of gHat, (notice we cannot simplify since are 
-        % vectors and matrices operations)
+        % Least Sqaures estimate of gHat, (notice we cannot simplify since 
+        % are vectors and matrices operations)
         gHat = (knownPilotSymbols' * rxPilotEqualized) / ...
                (knownPilotSymbols' * knownPilotSymbols);    
         % Numerical safety if too low gain
@@ -701,8 +777,11 @@ function [errMax, ...
         % Effective post-equalizatoin error variance (is a power since it is 
         % the square modulus of a complex number representing symbols)
         noiseVarAfterEq(k) = ...
-        sum(abs(postEqResidual).^2) / max(numPilotSymbols - 1, 1);  % -1 since 
-        % we have already consumed one degree of freedom in Least Square estim
+        sum(abs(postEqResidual).^2) / max(numPilotSymbols-1, 1);  % Np-1: 
+        % estimating the complex residual gain gHat from the same pilots
+        % consumes one complex degree of freedom (equivalently, two real 
+        % DoFs). The variance is evaluated after normalization by gHat, 
+        % i.e. on the same symbol scale seen by the soft demapper.
         % Numerical floor, to avoid a too low variance that could explose LLR
         noiseVarAfterEq(k) = max(noiseVarAfterEq(k), 1e-8);
 
