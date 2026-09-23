@@ -322,7 +322,7 @@ function [errMax, ...
         end      
 
         % ADAPTIVE CORRELATION THRESHOLD
-        % CFAR Cell-Averaging Constant False Alarm Rate
+        % CA-CFAR Cell-Averaging Constant False Alarm Rate
         halfWindow = floor(backgroundWindowLength / 2);
         halfGuard  = floor(guardLength / 2);        
         for candidateIdx = 1:numCandidates        
@@ -468,6 +468,7 @@ function [errMax, ...
         detections = detections(timeOrder); % ordered in time
     end
     % Make sure they do not exceed: #numBursts
+    %{%}
     if length(detections) > numBursts
         % Keep the strongest numBursts detections first.
         [~, strongestOrder] = sort([detections.score], 'descend'); % from max to min
@@ -476,7 +477,7 @@ function [errMax, ...
         [~, timeOrder] = sort([detections.firstSyncSample], 'ascend');
         detections = detections(timeOrder);
     end
-
+    
     %% 7. PROCESS ALL DETECTED BURSTS
     % this cycle iterates over all detected bursts
     numDetectedBursts = min(length(detections), numBursts);    
@@ -748,7 +749,7 @@ function [errMax, ...
         W = conj(H_hat) ./ (abs(H_hat).^2 + noiseVarHat/Px);
         Xhat = W .* Y; % equalization
         % Back to time/symbol domain
-        rxBurstEqualized = ifft(Xhat, symbolsPerBurst);  
+        rxBurstEqualized = ifft(Xhat, symbolsPerBurst);
     
         % POST-MMSE residual gain estimation using pilots (for potential 
         % ampitude gain and phase rotations on the burst)
@@ -895,7 +896,7 @@ function [errMax, ...
         indexReliability = sortedScores(1) - sortedScores(2);
         % Validate decoded identifier.
         if decodedBurstIndex < 1 || decodedBurstIndex > numBursts    
-        %    % Invalid identifier.
+            % Invalid identifier.
             continue; % skip to the following burst
         end    
         % If another detected burst already claimed this identifier,

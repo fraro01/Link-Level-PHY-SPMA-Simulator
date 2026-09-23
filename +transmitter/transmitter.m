@@ -225,8 +225,9 @@ function [packet, ... % original packet with random bits
         % Check that the requested duty cycle is physically compatible with
         % the required tuner delays.
         if totalTunerDelay > totalNonTxTime
-            error(['Requested dutyCycle is too high to accommodate the ' ...
-                   'required tuner delays.']);
+            totalNonTxTime = totalNonTxTime + (totalTunerDelay-totalNonTxTime);
+            %error(['Requested dutyCycle is too high to accommodate the ' ...
+            %       'required tuner delays.']);
         end
         
         % Remaining non-TX time that can be distributed as random listening.
