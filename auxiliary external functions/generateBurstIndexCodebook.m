@@ -7,7 +7,7 @@
 % distance
 
 
-function codebook = generateBurstIndexCodebook(numBursts, codewordLength)
+function [codebook, friendIndexCodeword] = generateBurstIndexCodebook(numBursts, codewordLength)
 
     % Fixed seed: TX and RX must generate exactly the same codebook.
     previousRng = rng;
@@ -53,6 +53,30 @@ function codebook = generateBurstIndexCodebook(numBursts, codewordLength)
     
     % fprintf('Burst-index codebook: minimum Hamming distance = %d\n', bestMinDistance);
     codebook = bestCodebook;
+
+    %% Reserved FRIEND / INTERFERER codeword
+    % Generate all possible binary words having the same length
+    % as the protected burst-index codewords.
+    allCandidates = de2bi( ...
+        0:(2^codewordLength - 1), ...
+        codewordLength, ...
+        'left-msb');    
+    % For every possible candidate, calculate its minimum Hamming
+    % distance from the valid desired-transmitter codewords.
+    minDistanceFromDesiredCodebook = zeros(size(allCandidates,1),1);    
+    for c = 1:size(allCandidates,1)    
+        % Hamming distance between candidate c and every valid
+        % desired burst-index codeword.
+        distances = sum( ...
+            codebook ~= allCandidates(c,:), ...
+            2);    
+        % We care about the closest desired codeword.
+        minDistanceFromDesiredCodebook(c) = min(distances);    
+    end    
+    % Select the candidate having the largest possible minimum
+    % Hamming distance from the desired burst-index codebook.
+    [~, bestFriendCandidate] = max(minDistanceFromDesiredCodebook);    
+    friendIndexCodeword = allCandidates(bestFriendCandidate,:);
 
     % Restore the previous random state.
     rng(previousRng);

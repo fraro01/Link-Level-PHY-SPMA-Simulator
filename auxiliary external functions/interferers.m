@@ -26,7 +26,13 @@ function interferer_waveform = interferers( ...
                                 samplesPerSymbol, ...
                                 Fs, ...
                                 tunerDelay_s, ...
-                                dutyCycle ...
+                                dutyCycle, ...
+                                syncReference, ...
+                                phaseReference, ...
+                                bitsPerBurst, ...
+                                numProtectedIndexBits, ...
+                                friendIndexCodeword, ...
+                                cpLength ...
                                 )
     
     % initialize the final interferer_waveform
@@ -35,29 +41,85 @@ function interferer_waveform = interferers( ...
     for i = 1:numInterferers
     
         %% Originate the Packet
-        % retrieve the proper size of the final transmitted bursts inside the final
-        % transmitted signal
-        numBursts = size(txSCFDEBursts, 2);
-        bitsPerBurst = 3 * size(txSCFDEBursts, 1);
-        txBursts = randi([0 1], bitsPerBurst, numBursts);
+        % Number of bursts must be identical to the desired transmitter.
+        numBursts = size(txSCFDEBursts, 2);        
+        % Safety checks for the reserved FRIEND index.
+        assert(length(friendIndexCodeword) == numProtectedIndexBits, ...
+            'friendIndexCodeword must contain numProtectedIndexBits bits.');        
+        assert(all(ismember(friendIndexCodeword, [0 1])), ...
+            'friendIndexCodeword must be binary.');
+        % Column-vector representation, consistent with the transmitter framing.
+        friendIndexBits = friendIndexCodeword(:);        
+        % Generate a random payload for every interferer burst.
+        % IMPORTANT:
+        % bitsPerBurst is exactly the same payload length used by transmitter.m.
+        interfererPayload = randi([0 1], ...
+                                  bitsPerBurst, ...
+                                  numBursts);
+        %% Burst framing
+        % EXACT SAME PHY STRUCTURE AS THE DESIRED TRANSMITTER:
+        % sync | phase reference | protected index | payload
+        % The ONLY intentional structural difference is that every interferer
+        % uses the same reserved FRIEND index codeword.        
+        framedBursts = zeros( ...
+            bitsPerBurst + ...
+            length(syncReference) + ...
+            length(phaseReference) + ...
+            numProtectedIndexBits, ...
+            numBursts);
+        for k = 1:numBursts        
+            framedBursts(:,k) = [ ...
+                syncReference;
+                phaseReference;
+                friendIndexBits;
+                interfererPayload(:,k)
+            ];        
+        end
         
         %% 8-PSK Modulation
         M = 8;
-        bitsPerSymbol = log2(M); % number of bits per symbol transmitted
-        modulatedBursts = zeros(size(txSCFDEBursts, 1), numBursts); % matrix
-        for k = 1:numBursts
-            bits_k = txBursts(:,k); % k column of the 8-psk padded burst
-            % matrix with #bitsPerSymbol rows, and columns automatically set by [],
-            % we then transpose with .' hence each row contains one symbol
-            bitGroups = reshape(bits_k, bitsPerSymbol, []).';
-            % converts each row from binary to decimal (pskmod requires decimal)
-            symbolIndices = bi2de(bitGroups, 'left-msb');
-            % assigns to the k column the result of the modulation
+        bitsPerSymbol = log2(M);        
+        % Same padding rule used by transmitter.m.
+        bitsPerFramedBurst = size(framedBursts, 1);        
+        numPadBits8PSK = mod( ...
+            bitsPerSymbol - mod(bitsPerFramedBurst, bitsPerSymbol), ...
+            bitsPerSymbol);        
+        % Add zero padding after the payload.
+        framedBurstsPadded = [ ...
+            framedBursts;
+            zeros(numPadBits8PSK, numBursts)
+        ];        
+        bitsPerBurst8PSK = size(framedBurstsPadded, 1);        
+        symbolsPerBurst = bitsPerBurst8PSK / bitsPerSymbol;        
+        modulatedBursts = zeros(symbolsPerBurst, numBursts);        
+        for k = 1:numBursts        
+            bits_k = framedBurstsPadded(:,k);        
+            bitGroups = reshape( ...
+                bits_k, ...
+                bitsPerSymbol, ...
+                []).';
+            symbolIndices = bi2de( ...
+                bitGroups, ...
+                'left-msb');        
             modulatedBursts(:,k) = pskmod( ...
                 symbolIndices, ...
                 M, ...
-                pi/M, ... % initial phase of the constellation (shifted by pi/M) for pahse and synchronization purposes in receiver, the decisional boundaries coincide with neat angles
-                'gray'); % Gray coding, hence close symbols differ for only 1 bit
+                pi/M, ...
+                'gray');        
+        end
+
+        %% SC-FDE Modulation, Cyclic Prefix
+        txSCFDEBurstsInterferer = zeros( ...
+            symbolsPerBurst + cpLength, ...
+            numBursts);        
+        for k = 1:numBursts        
+            burstSymbols = modulatedBursts(:,k);        
+            % Same cyclic-prefix construction used by transmitter.m.
+            cyclicPrefix = burstSymbols(end-cpLength+1:end);        
+            txSCFDEBurstsInterferer(:,k) = [ ...
+                cyclicPrefix;
+                burstSymbols
+            ];        
         end
         
         % NOTE! from now on should be the same as the TRANSMITTER block of the main
@@ -65,11 +127,11 @@ function interferer_waveform = interferers( ...
         % with "modulatedBursts"
         
         %% Time-Frequency Hopping
-        symbolsPerBurstWithCP = size(modulatedBursts,1);        
-        burstTxTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate;
-        channelBandwidth = (fMax - fMin) / numFrequencyChannels;
+        symbolsPerBurstWithCP = size(txSCFDEBurstsInterferer, 1);        
+        burstTxTime = (symbolsPerBurstWithCP + filterSpan) / symbolRate;        
+        channelBandwidth = (fMax - fMin) / numFrequencyChannels;        
         carrierFrequencies = fMin + channelBandwidth/2 + ...
-            (0:numFrequencyChannels-1)*channelBandwidth; 
+            (0:numFrequencyChannels-1)*channelBandwidth;
         
         % rng();   % if you want results reproducibility, uncomment it and  
         % insert a number in it. 
@@ -189,7 +251,7 @@ function interferer_waveform = interferers( ...
         relativeCarrierFrequencies = carrierFrequencies - fCenter;
         for k = 1:numBursts
             reset(txRRC); % clean the filter memory per each burst
-            burstSymbols = modulatedBursts(:,k); % from where we sample
+            burstSymbols = txSCFDEBurstsInterferer(:,k); % from where we sample
             % Add zeros to flush the TX/RX filter memory response tail for last
             % symbol
             burstSymbolsPadded = [burstSymbols; zeros(extraSymbols,1)];
