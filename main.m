@@ -25,25 +25,17 @@ tunerDelay_s = 1e-6;
 packetLength = 1331; % bits
 dutyCycle = 1.0; % percentage TX/RX (0,1]
 numBursts = 28;
+% FIXED OPTIMIZED PREAMBLE, orthogonality for its delayed copies
 % the sync and the reference bits remain fixed for all bursts
-
-% FIXED OPTIMIZED PREAMBLE
-preambleData = load( ...
-    'optimizedPreamble.mat', ...
-    'syncReference', ...
-    'phaseReference', ...
-    'preambleInfo', ...
-    'M', ...
-    'LestDesign', ...
-    'channelEstMargin');
+preambleData = load('optimizedPreamble.mat', ...
+                    'syncReference', ...  % mandatory load
+                    'phaseReference', ... % mandatory load
+                    'preambleInfo', ...
+                    'M', ...
+                    'LestDesign', ...
+                    'channelEstMargin');
 syncReference  = preambleData.syncReference;
 phaseReference = preambleData.phaseReference;
-% Safety checks
-assert(length(syncReference) == 48, 'syncReference must contain 48 bits.');
-assert(length(phaseReference) == 48,'phaseReference must contain 48 bits.');
-assert(all(ismember(syncReference, [0 1])), 'syncReference must be binary.');
-assert(all(ismember(phaseReference, [0 1])), 'phaseReference must be binary.');
-
 rng('shuffle'); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
@@ -78,8 +70,9 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 1000; % simulation cycles 33
+metrics.packets = 1; % simulation cycles 33
 % for storing values we use a MATLAB 'Structure'
+metrics.detections = 0; % number of detections made by the CA-CFAR algorith
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
 metrics.finalOriginalPacketErroredBits = 0; % errored bits in the original 
@@ -94,6 +87,7 @@ metrics.EbN0_linear_runs = zeros(1, metrics.packets); % E_b/N_0 linear
 metrics.EVM_runs = zeros(numBursts, metrics.packets); % EVM percentage
 show_metrics_plots = true; % whether to show the metric plots or not
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% SIMULATION LOOP
 for i = 1:metrics.packets
 
@@ -138,17 +132,15 @@ for i = 1:metrics.packets
      dutyCycle ...
      );
 
+    %{
+    % Diagnostic
     disp('Reserved FRIEND index codeword:');
-disp(friendIndexCodeword);
+    disp(friendIndexCodeword);
+    friendDistances = sum(burstIndexCodebook ~= friendIndexCodeword, 2);
+    fprintf('Minimum FRIEND-to-desired Hamming distance = %d\n', ...
+        min(friendDistances));
+    %}
 
-friendDistances = sum( ...
-    burstIndexCodebook ~= friendIndexCodeword, ...
-    2);
-
-fprintf( ...
-    'Minimum FRIEND-to-desired Hamming distance = %d\n', ...
-    min(friendDistances));
-      
     %% CHANNEL
     [blankingMask, ... % blanking mask TxRxN
      rxSignal, ... % FINAL SIGNAL IN RX
@@ -171,7 +163,6 @@ fprintf( ...
         Fs, ...
         startTimes, ...
         symbolsPerBurstWithCP, ...
-        txSCFDEBursts,  ...
         filterSpan, ...
         rolloff, ...
         numFrequencyChannels, ...
@@ -206,7 +197,8 @@ fprintf( ...
      H_est_bursts, ...
      vettore, ...           % diagnostic
      detections, ...        % diagnostic
-     rxMatchedByChannel ... % diagnostic
+     rxMatchedByChannel, ... % diagnostic
+     numDetectedBursts ...
     ] = receiver.receiver( ...
         rxSignal, ... % input signal
         blankingMask, ...
@@ -273,6 +265,7 @@ fprintf( ...
     metrics.SINR_runs(i) = sinr_linear;
     metrics.EbN0_linear_runs(i) = EbN0_linear;
     metrics.EVM_runs(:,i) = evmPerBurst_percent;
+    metrics.detections = metrics.detections + numDetectedBursts;
    
     % Metric Plots outputted only for the first iteration over the first
     % packet
@@ -295,6 +288,7 @@ fprintf( ...
                                      burstDetected)
     end
 end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % MATLAB Structure, for displaying values, in the Report, using the
 % function 'final_values' from the Static Class 'CalculateMetrics' acting 
@@ -360,6 +354,4 @@ fprintf('Burst Loss Rate                = %.2f%%\n', ...
 fprintf('Packet Error Rate              = %.2f%%\n', ...
     metrics_calculated.PER);
 % report end
-fprintf('=============================================================\n'); 
-
-
+fprintf('=============================================================\n');

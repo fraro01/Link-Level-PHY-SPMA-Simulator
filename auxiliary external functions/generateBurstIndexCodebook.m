@@ -22,25 +22,22 @@ function [codebook, friendIndexCodeword] = generateBurstIndexCodebook(numBursts,
     for trial = 1:numTrials
 
         % Generate distinct random binary codewords.
+        % it generates an array of length 15, with its 15 cells populated
+        % by random decimal numbers ranging between 0 and 2^15
         candidateDecimals = randperm(2^codewordLength, numBursts) - 1;
 
-        candidateCodebook = de2bi( ...
-            candidateDecimals, ...
-            codewordLength, ...
-            'left-msb');
+        candidateCodebook = de2bi(candidateDecimals, ...
+                                  codewordLength, ...
+                                 'left-msb');
 
         % Compute minimum pairwise Hamming distance.
         minDistance = inf;
 
         for i = 1:numBursts-1
             for j = i+1:numBursts
-
                 distance = sum( ...
-                    candidateCodebook(i,:) ~= ...
-                    candidateCodebook(j,:));
-
+                    candidateCodebook(i,:) ~= candidateCodebook(j,:));
                 minDistance = min(minDistance, distance);
-
             end
         end
 
@@ -57,25 +54,23 @@ function [codebook, friendIndexCodeword] = generateBurstIndexCodebook(numBursts,
     %% Reserved FRIEND / INTERFERER codeword
     % Generate all possible binary words having the same length
     % as the protected burst-index codewords.
-    allCandidates = de2bi( ...
-        0:(2^codewordLength - 1), ...
-        codewordLength, ...
-        'left-msb');    
+    allCandidates = de2bi(0:(2^codewordLength - 1), ...
+                          codewordLength, ...
+                          'left-msb');
     % For every possible candidate, calculate its minimum Hamming
     % distance from the valid desired-transmitter codewords.
     minDistanceFromDesiredCodebook = zeros(size(allCandidates,1),1);    
     for c = 1:size(allCandidates,1)    
         % Hamming distance between candidate c and every valid
         % desired burst-index codeword.
-        distances = sum( ...
-            codebook ~= allCandidates(c,:), ...
-            2);    
+        distances = sum(codebook ~= allCandidates(c,:), 2); % 2 --> sum over the columns for each row!
         % We care about the closest desired codeword.
-        minDistanceFromDesiredCodebook(c) = min(distances);    
+        minDistanceFromDesiredCodebook(c) = min(distances);
     end    
     % Select the candidate having the largest possible minimum
     % Hamming distance from the desired burst-index codebook.
-    [~, bestFriendCandidate] = max(minDistanceFromDesiredCodebook);    
+    % take the maximum of the minimum distances!
+    [~, bestFriendCandidate] = max(minDistanceFromDesiredCodebook);
     friendIndexCodeword = allCandidates(bestFriendCandidate,:);
 
     % Restore the previous random state.

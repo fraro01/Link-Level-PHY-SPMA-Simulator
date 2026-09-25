@@ -12,7 +12,8 @@ function [errMax, ...
           H_est_bursts, ... 
           vettore, ...           % diagnostic
           detections, ...        % diagnostic
-          rxMatchedByChannel ... % diagnostic
+          rxMatchedByChannel, ... % diagnostic
+          numDetectedBursts ...
          ] = receiver( rxSignal, ... % input signal
                                     blankingMask, ...
                                     numBursts, ...
@@ -99,7 +100,7 @@ function [errMax, ...
     % if 'guardLength = 0 --> exclude ONLY the CUT (Candidate Under Test)'
     guardLength = (10*numSyncSymbols)/32;   
     % Number of standard deviations above the local correlation background.
-    thresholdK = 7;  
+    thresholdK = 10;  
     % Minimum usable fraction of synchronization symbols after blanking.
     % Blanking Compensation variable threshold
     minUsableSyncFraction = 0.33;
@@ -371,7 +372,7 @@ function [errMax, ...
 
         % for the 'metricsPlots'
         syncMetricByChannel{ch} = syncMetric; % detectionScore;
-        syncThresholdByChannel{ch} = syncThresholdCandidate;
+        syncThresholdByChannel{ch} = syncThresholdCandidate; % Blanking-compensated CA-CFAR
 
         
     %% 4. FIND ALL PREAMBLE PEAKS ON THIS FREQUENCY CHANNEL
@@ -831,7 +832,7 @@ function [errMax, ...
         rxFramedBurstsPaddedLLR_detected(:,k) = burstLLR; % a soft value per each bit
     end
 
-    % BURST INDEX DECODING AND REORDERING
+    %% BURST INDEX DECODING AND REORDERING
     % Length of the known part preceding the burst identifier.
     knownHeaderLength = length(syncReference) + length(phaseReference);    
     % Positions of all CODEBOOK-CODED burst-index bits.
@@ -842,16 +843,19 @@ function [errMax, ...
     % transmitted burst identifiers, not to detection order.
     rxFramedBurstsPaddedLLR = zeros(symbolsPerBurst * bitsPerSymbol, numBursts);
     % Final burst detection vector indexed by the true burst identifier.
-    % it is simply the chronologically reordered version of: 'burstDetected'
-    % it will substitute it!
+    % it is simply the chronologically reordered version
     burstDetectedReordered = false(numBursts,1);
+
+    headerLength = length(syncReference) + ...
+                   length(phaseReference) + ...
+                   numProtectedIndexBits;
 
     % Since the metrics will compare 'rxEqualizedBursts' with 'modulatedBursts'
     % we should reorder some of them with the following 3 arrays that will
     % substitute their original related ones once reordered after the following cycle
-    rxEqualizedBurstsReordered = zeros(symbolsPerBurst, numBursts); % for reordered metrics
-    rxSCFDEBurstsReordered = zeros(symbolsPerBurstWithCP, numBursts);         % for reordered metrics
-    H_est_burstsReordered = zeros(symbolsPerBurst, numBursts);           % for reordered metrics
+    rxEqualizedBurstsReordered = zeros(symbolsPerBurst, numBursts);   % for reordered metrics
+    rxSCFDEBurstsReordered = zeros(symbolsPerBurstWithCP, numBursts); % for reordered metrics
+    H_est_burstsReordered = zeros(symbolsPerBurst, numBursts);        % for reordered metrics
 
     % whether at low SNR two detections declare the same ID, we take 
     % advantage of the LLR reliability:
@@ -883,17 +887,17 @@ function [errMax, ...
             indexScores(candidateIdx) = sum(bipolarCodeword .* protectedIndexLLR);        
         end        
 
-        %% FRIEND index hypothesis
+        % FRIEND index hypothesis
         % Compute the FRIEND score using exactly the same soft metric
         % used for all desired burst identifiers.
-        friendCodeword = friendIndexCodeword(:);
+        friendCodeword = friendIndexCodeword(:); % transpose it to column vector
         friendBipolarCodeword = 1 - 2*friendCodeword;
         friendIndexScore = sum(friendBipolarCodeword .* protectedIndexLLR);
-        %% Joint DESIRED / FRIEND decision
+        % Joint DESIRED / FRIEND decision
         % Best desired hypothesis.
         [bestDesiredScore, decodedBurstIndex] = max(indexScores);
         % Compare the FRIEND hypothesis against the best desired one.
-        friendMargin = friendIndexScore - bestDesiredScore;
+        
         if friendIndexScore > bestDesiredScore
             % ---------------------------------------------------------
             % FRIENDLY INTERFERER
@@ -902,6 +906,9 @@ function [errMax, ...
             % the same preamble as the desired transmitter.
             % However, its protected index identifies it as FRIEND.
             % Therefore it must NOT enter the desired-burst reordering.
+            %{
+            % DIAGNOSTIC Debug information for desired bursts.
+            friendMargin = friendIndexScore - bestDesiredScore;
             fprintf( ...
                 ['Detection %d: FRIEND | ' ...
                  'friendScore = %.3f | ' ...
@@ -911,22 +918,30 @@ function [errMax, ...
                 friendIndexScore, ...
                 bestDesiredScore, ...
                 friendMargin);
-            continue;
+            %}
+            continue; % skip to the following detection, NOTE! this is very 
+            % important, because it means that we do not insert FRIENDS
+            % into the arrays for the decoding below, for the final blocks.
         end
-        %% Reliability of the DESIRED decision
+
+        % Reliability of the DESIRED decision
         % The reliability must include FRIEND among the competing
         % hypotheses.
-        % Since bestDesiredScore is the winning hypothesis here,
+        % Since bestDesiredScore is the winning hypothesis here:
+        % (friendIndexScore < bestDesiredScore)
         % find its strongest competitor among:
         %   - all other desired burst IDs
         %   - FRIEND
         competingDesiredScores = indexScores;
-        competingDesiredScores(decodedBurstIndex) = -inf;
+        competingDesiredScores(decodedBurstIndex) = -inf; % set the best 
+        % score to -inf, so to extract the second best one in the below line:
         secondBestDesiredScore = max(competingDesiredScores);
-        strongestCompetitorScore = ...
-            max(secondBestDesiredScore, friendIndexScore);
+        strongestCompetitorScore = max(secondBestDesiredScore, friendIndexScore);
+        % 'indexRealiability' is expressed as a MARGIN!
         indexReliability = bestDesiredScore - strongestCompetitorScore;
-        % Debug information for desired bursts.
+        
+        %{
+        % DIAGNOSTIC Debug information for desired bursts.
         fprintf( ...
             ['Detection %d: DESIRED %d | ' ...
              'desiredScore = %.3f | ' ...
@@ -937,13 +952,21 @@ function [errMax, ...
             bestDesiredScore, ...
             friendIndexScore, ...
             indexReliability);
+        %}
+
+        % NOTE! POSSIBLE BURST ERASURE CASE!
+        if indexReliability < 10
+            continue;
+        end
 
         % If another detected burst already claimed this identifier,
         % retain the one whose index bits are more reliable.
         if indexReliability <= bestIndexReliability(decodedBurstIndex)        
-            continue;        
-        end    
-        bestIndexReliability(decodedBurstIndex) = indexReliability;
+            continue; % if we are not sure enough we avoid inserting this 
+            % detection, and we skip directly to the following one
+        end
+        bestIndexReliability(decodedBurstIndex) = indexReliability;                
+
         % Put this received frame in its TRUE transmitted position.
         rxFramedBurstsPaddedLLR(:,decodedBurstIndex) = currentBurstLLR;    
         burstDetectedReordered(decodedBurstIndex) = true;
@@ -970,9 +993,7 @@ function [errMax, ...
     % NOTE! Turbo decoder can correct a lack of information; but in 
     % general, it cannot autonomously correct a wrong LLRs mapping!
     % Recover encoded packet from bursts
-    headerLength = length(syncReference) + ...
-                   length(phaseReference) + ...
-                   numProtectedIndexBits;
+    
     %remove headers
     rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
     % stack into column

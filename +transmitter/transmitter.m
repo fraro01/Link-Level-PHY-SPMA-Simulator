@@ -76,7 +76,7 @@ function [packet, ... % original packet with random bits
     bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
     
     
-    %% 48 sync reference bits, 48 phase reference bits, X indexing bits 
+    %% X indexing bits 
     % Burst index codebook
     % Number of bits physically transmitted for the burst identifier.
     numProtectedIndexBits = 15;
