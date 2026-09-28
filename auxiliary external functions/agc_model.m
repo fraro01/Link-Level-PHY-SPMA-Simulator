@@ -86,6 +86,7 @@ function [rxOut, vettore] = agc_model(rxIn, Fs)
         % accordingly.
         vettore = [vettore; sqrt(mean(abs(x).^2))];
     %{%}
+        % it also resembles the logic of the Squelch of the radio
         if sqrt(mean(abs(x).^2)) <= 0.05 % NOTE! this strongly improves EVM 
             rxOut(idx) = 0; % if no transmission is found set the level to zero!
             continue

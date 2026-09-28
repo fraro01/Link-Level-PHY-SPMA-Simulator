@@ -39,7 +39,9 @@ function [packet, ... % original packet with random bits
           Fs, ... % sampling frequency
           cpLength, ... % Cyclic Prefix for SCFDE
           tunerDelay_s, ... % tuner delay for carriers
-          dutyCycle ...
+          dutyCycle, ...
+          burstIndexCodebook, ...
+          friendIndexCodeword ...
           )
  
 
@@ -75,15 +77,9 @@ function [packet, ... % original packet with random bits
     % (bitsPerBurst x numBursts) matrix keeping the order of bits
     bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
     
+    % essential to extract the proper length
+    numProtectedIndexBits = size(burstIndexCodebook, 2);
     
-    %% X indexing bits 
-    % Burst index codebook
-    % Number of bits physically transmitted for the burst identifier.
-    numProtectedIndexBits = 15;
-    % Generate the common TX/RX burst-index codebook.
-    [burstIndexCodebook, friendIndexCodeword] = ...
-         generateBurstIndexCodebook(numBursts, numProtectedIndexBits);
-
     % matrix of zeros
     % sync | phase reference | burst index | payload
     framedBursts = zeros(bitsPerBurst + ...

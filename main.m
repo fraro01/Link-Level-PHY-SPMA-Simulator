@@ -15,8 +15,18 @@ close all;
 % Add the two directories paths
 addpath('auxiliary external functions') % for auxiliary functions
 addpath('utils') % for testing functions
+addpath('metrics') % for the metrics calculus
 % transmitter, channel and receiver folders have already the '+' before the
 % name, acting as a package/namespace
+% required '.mat' files for transmitter.m
+file1 = fullfile('optimizedPreamble.mat');
+file2 = fullfile('optimizedIndexing.mat');
+if ~isfile(file1) || ~isfile(file2)
+    error(['Required files for transmitter.m not found. ' ...
+           'Make sure to have already run the script: ' ...
+           'design_optimizedPreamble_burstIndexing.m, present in the ' ...
+           'folder: utils']);
+end
 
 %% TRANSMITTER PARAMATERS
 % TX tuner delay: 1 microsecond, only when frequency changes
@@ -36,6 +46,12 @@ preambleData = load('optimizedPreamble.mat', ...
                     'channelEstMargin');
 syncReference  = preambleData.syncReference;
 phaseReference = preambleData.phaseReference;
+% retrieve the saved indexing Codebook
+indexingData = load('optimizedIndexing.mat', ...
+                     'burstIndexCodebook', ...
+                     'friendIndexCodeword');
+burstIndexCodebook = indexingData.burstIndexCodebook;
+friendIndexCodeword = indexingData.friendIndexCodeword;
 rng('shuffle'); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
@@ -70,7 +86,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 1; % simulation cycles 33
+metrics.packets = 10; % simulation cycles 33
 % for storing values we use a MATLAB 'Structure'
 metrics.detections = 0; % number of detections made by the CA-CFAR algorith
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
@@ -129,7 +145,9 @@ for i = 1:metrics.packets
      Fs, ... % sampling frequency
      cpLength, ... % Cyclic Prefix for SCFDE
      tunerDelay_s, ... % tuner delay for carriers
-     dutyCycle ...
+     dutyCycle, ...
+     burstIndexCodebook, ...
+     friendIndexCodeword ...
      );
 
     %{
@@ -325,6 +343,8 @@ fprintf('Hard errors inferred from LLR sign             = %d\n', ...
                             metrics_calculated.finalEncodedBitErrors);
 fprintf('Total final errored bits from original packets = %d\n', ...
                             metrics_calculated.finalOriginalBitErrors);
+fprintf('Total number of detections made by CA-CFAR     = %d\n', ...
+                            metrics.detections);
 % div
 fprintf('-------------------------------------------------------------\n'); 
 fprintf('Signal-to-Interference-plus-Noise Ratio   = %.2f dB\n', ...
