@@ -10,10 +10,11 @@ function [errMax, ...
           numPilotSymbols, ...
           rxEqualizedBursts, ...
           H_est_bursts, ... 
-          vettore, ...           % diagnostic
-          detections, ...        % diagnostic
-          rxMatchedByChannel, ... % diagnostic
-          numDetectedBursts ...
+          vettore, ...             % diagnostic
+          detections, ...          % diagnostic
+          rxMatchedByChannel, ...  % diagnostic
+          numDetectedBursts, ...
+          intraBurstDiagnostic ... % diasgnostic
          ] = receiver( rxSignal, ... % input signal
                                     blankingMask, ...
                                     numBursts, ...
@@ -805,6 +806,26 @@ function [errMax, ...
     rxFramedBurstsPaddedLLR_detected = ...
         zeros(symbolsPerBurst * bitsPerSymbol, numDetectedBursts);
     
+
+    %% Parameters for selective intra-burst erasure
+    localWindowSymbols = 8;
+    gammaErasure = inf;   % INITIAL experimental value - to be optimized MC
+    HeaderLength = length(syncReference) + ...
+                          length(phaseReference) + ...
+                          numProtectedIndexBits;   
+    % First LLR belonging to coded payload
+    firstPayloadLLR = HeaderLength + 1;
+
+    % Intra-burst erasure diagnostic
+    intraBurstDiagnostic = struct('noiseVarAfterEq', [], ... 
+                                  'sigmaDD', [], ...
+                                  'reliabilityRatio', [], ...
+                                  'erasedWindow', [], ...
+                                  'firstSymbol', [], ...
+                                  'lastSymbol', [], ...
+                                  'firstPayloadLLR', [], ... % first LLR position
+                                  'lastPayloadLLR', []);     % last LLR position
+    
     % 8-PSK demodulation cycle
     for k = 1:numDetectedBursts
         % if the current burst was not found (erased), we directly skip its
@@ -821,16 +842,98 @@ function [errMax, ...
         % MATLAB pskdemod LLR convention:
         %   positive LLR -> bit 0 more likely
         %   negative LLR -> bit 1 more likely
-        burstLLR = pskdemod( ...
-            rxSymbols_k, ...
-            M, ...
-            pi/M, ...
-            'gray', ...
-            'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the likelihoods
-            'NoiseVariance', noiseVariance_k);
+        burstLLR = pskdemod(rxSymbols_k, ...
+                            M, ...
+                            pi/M, ...
+                            'gray', ...
+                            'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the likelihoods
+                            'NoiseVariance', noiseVariance_k);
+
+
+        % Hard 8-PSK decisions
+        decidedIndices = pskdemod(rxSymbols_k, ...
+                                  M, ...
+                                  pi/M, ...
+                                  'gray');
+        % Reconstruct ideal constellation symbols
+        decidedSymbols = pskmod(decidedIndices, ...
+                                M, ...
+                                pi/M, ...
+                                'gray');    
+        % Symbol-wise post-equalization DD residual
+        ddResidual = rxSymbols_k - decidedSymbols;
+        
+        numSymbols = length(rxSymbols_k); % #symbolsPerBurst
+
+        numLocalWindows = ceil(numSymbols / localWindowSymbols);
+        sigmaDD_windows = nan(numLocalWindows,1);
+        reliabilityRatio_windows = nan(numLocalWindows,1);
+        erasedWindow = false(numLocalWindows,1);        
+        firstSymbol_windows = nan(numLocalWindows,1);
+        lastSymbol_windows = nan(numLocalWindows,1);        
+        firstPayloadLLR_windows = nan(numLocalWindows,1);
+        lastPayloadLLR_windows = nan(numLocalWindows,1);        
+        windowIdx = 0;
+        
+        % for cycle over the INTRA-BURST WINDOWS
+        for firstSymbol = 1:localWindowSymbols:numSymbols    
+
+            windowIdx = windowIdx + 1;
+
+            lastSymbol = min(firstSymbol + localWindowSymbols - 1, numSymbols);
+            symbolIndices = firstSymbol:lastSymbol;    
+            % Local DD residual power
+            sigmaDD_m = mean(abs(ddResidual(symbolIndices)).^2);    
+            % Normalize against the GLOBAL post-EQ pilot estimate
+            reliabilityRatio = sigmaDD_m / max(noiseVariance_k, 1e-12);
+            
+            % LLR range corresponding to the current SYMBOL window
+            firstLLR_window = (firstSymbol - 1)*bitsPerSymbol + 1;
+            lastLLR_window  = lastSymbol*bitsPerSymbol;
+            
+            % Select ONLY the portion belonging to the coded payload.
+            % This protects:
+            %   - sync reference bits
+            %   - phase reference bits
+            %   - protected burst-index bits
+            firstLLR_toErase = max(firstLLR_window, firstPayloadLLR);
+            lastLLR_toErase  = lastLLR_window;
+            
+            isErased = false; % for diagnostic
+
+            if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
+                burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
+                isErased = true; % for diagnostic
+            end
+            
+            % for diagnostic
+            sigmaDD_windows(windowIdx) = sigmaDD_m;
+            reliabilityRatio_windows(windowIdx) = reliabilityRatio;
+            erasedWindow(windowIdx) = isErased;        
+            firstSymbol_windows(windowIdx) = firstSymbol;
+            lastSymbol_windows(windowIdx) = lastSymbol;            
+            % for diagnostic purposes
+            if firstLLR_toErase <= lastLLR_toErase
+                firstPayloadLLR_windows(windowIdx) = firstLLR_toErase;
+                lastPayloadLLR_windows(windowIdx) = lastLLR_toErase;
+            end
+
+        end
+        
+        % Diagnostic storage
+        intraBurstDiagnostic(k).noiseVarAfterEq = noiseVariance_k;
+        intraBurstDiagnostic(k).sigmaDD = sigmaDD_windows;
+        intraBurstDiagnostic(k).reliabilityRatio = reliabilityRatio_windows;
+        intraBurstDiagnostic(k).erasedWindow = erasedWindow;        
+        intraBurstDiagnostic(k).firstSymbol = firstSymbol_windows;
+        intraBurstDiagnostic(k).lastSymbol = lastSymbol_windows;        
+        intraBurstDiagnostic(k).firstPayloadLLR = firstPayloadLLR_windows;
+        intraBurstDiagnostic(k).lastPayloadLLR = lastPayloadLLR_windows;
+
         % Store according to DETECTION order for the moment.
         rxFramedBurstsPaddedLLR_detected(:,k) = burstLLR; % a soft value per each bit
     end
+
 
     %% BURST INDEX DECODING AND REORDERING
     % Length of the known part preceding the burst identifier.
