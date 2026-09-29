@@ -86,7 +86,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 10; % simulation cycles 33
+metrics.packets = 1; % simulation cycles 33
 % for storing values we use a MATLAB 'Structure'
 metrics.detections = 0; % number of detections made by the CA-CFAR algorith
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
