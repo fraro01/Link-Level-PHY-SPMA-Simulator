@@ -52,7 +52,7 @@ indexingData = load('optimizedIndexing.mat', ...
                      'friendIndexCodeword');
 burstIndexCodebook = indexingData.burstIndexCodebook;
 friendIndexCodeword = indexingData.friendIndexCodeword;
-rng('shuffle'); % set 'shuffle' to keep it random at each iteration, otherwise  
+rng(15234); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
@@ -86,7 +86,8 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 1; % simulation cycles 33
+metrics.packets = 50; % simulation cycles 33
+
 % for storing values we use a MATLAB 'Structure'
 metrics.detections = 0; % number of detections made by the CA-CFAR algorith
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 

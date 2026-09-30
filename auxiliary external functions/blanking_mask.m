@@ -57,7 +57,7 @@ function blankingMask = blanking_mask(rxSignal, ...
         else
         %}
             % Minimum blanking duration, 0.5 --> half of a burst
-            minBlankingBlockSamples = round(1 * burstDurationSamples);            
+            minBlankingBlockSamples = round(1.0 * burstDurationSamples);            
             % Number of blocks
             numBlocks = floor(numBlankedSamples / minBlankingBlockSamples);
             numBlocks = max(1, numBlocks);    % at least one block        

@@ -157,7 +157,7 @@ function [packet, ... % original packet with random bits
     % Configuration of Root Raised Cosine TX Filter, we configure the "rolloff"
     % now, because is used to calculate the Symbol Rate from the formula below
     % timing
-    % NOTE! if below we also include the variable: 'filterSpan' we get the 
+    % NOTE! below we also include the variable: 'filterSpan' we get the 
     % real physical time for transmitting a burst, because we take into
     % account also the tails of the RRC
     burstTxTime = (symbolsPerBurstWithCP + filterSpan)/ symbolRate; % seconds

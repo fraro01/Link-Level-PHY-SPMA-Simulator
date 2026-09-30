@@ -95,11 +95,11 @@ function [errMax, ...
     % ADAPTIVE DETECTION THRESHOLD
     % Number of correlation samples used to estimate the local correlation 
     % background.
-    backgroundWindowLength = 200;    
+    backgroundWindowLength = 500;    
     % Number of correlation samples excluded around the candidate under test.
     % This avoids contaminating the background estimate with the useful peak.
     % if 'guardLength = 0 --> exclude ONLY the CUT (Candidate Under Test)'
-    guardLength = (10*numSyncSymbols)/32;   
+    guardLength = numSyncSymbols * ( 32 / 100 );   
     % Number of standard deviations above the local correlation background.
     thresholdK = 10;  
     % Minimum usable fraction of synchronization symbols after blanking.
@@ -377,12 +377,16 @@ function [errMax, ...
 
         
     %% 4. FIND ALL PREAMBLE PEAKS ON THIS FREQUENCY CHANNEL
+        
+        % NOTE! this would make sense ONLY if we do not care about other
+        % transmissions! outside the link TX-RX; but since there are also the
+        % FRIENDS (firenldy interferers) we must temporarly erase this part!
         % Two detections belonging to the same physical burst must not be
         % interpreted as two separate bursts.
         % A burst cannot realistically start again a few samples after itself.
         % Use approximately 80% of one burst duration as minimum separation.
-        minPeakDistanceSamples = ...
-            max(1, round(0.8 * symbolsPerBurstWithCP * samplesPerSymbol));
+       %  minPeakDistanceSamples = ...
+       %     max(1, round(0.8 * symbolsPerBurstWithCP * samplesPerSymbol));
     
         % we find all the possible peaks that overcome the threshold in the 
         % current channel, for sure they could be more than 28 even just 
@@ -391,10 +395,11 @@ function [errMax, ...
         % the bursts with the proper indexing numbers.
         [peakScores, peakCandidateIndices] = ...
             findpeaks( ...
-                detectionScore, ...
-                'MinPeakHeight', 1, ... % score >= 1 --> threshold overcome
-                'MinPeakDistance', minPeakDistanceSamples); % avoid interpreting 
-        % different close samples of the same maximum as different bursts
+                    detectionScore, ...
+                    'MinPeakHeight', 1 ... % score >= 1 --> threshold overcome     
+                 ); 
+                % 'MinPeakDistance', minPeakDistanceSamples ... % avoid interpreting different close samples of the same maximum as different bursts
+                
 
         % store the detection, the ordering now does not make any sense NOW
         for p = 1:length(peakCandidateIndices) % how many peaks were found
@@ -411,6 +416,10 @@ function [errMax, ...
 
     end
 
+%{ 
+    % NOTE! this would make sense ONLY if we do not care about other
+    % transmissions! outside the link TX-RX; but since there are also the
+    % FRIENDS (firenldy interferers) we must temporarly erase this part!
     %% 5. REMOVE DUPLICATE TIME DETECTIONS ACROSS FREQUENCY CHANNELS
     % due to leakage, CFO, non-ideal filters...
     % basically: same time, different frequencies --> keep the strongest
@@ -456,6 +465,7 @@ function [errMax, ...
         end    
         detections = detectionsClean;  % replace the 'detections' structure  
     end
+%}
 
     %% 6. ORDER DETECTED BURSTS BY ARRIVAL TIME
     if ~isempty(detections)
@@ -781,7 +791,19 @@ function [errMax, ...
         % i.e. on the same symbol scale seen by the soft demapper.
         % Numerical floor, to avoid a too low variance that could explose LLR
         noiseVarAfterEq(k) = max(noiseVarAfterEq(k), 1e-8);
-
+        
+        % TODO! based on the 'noiseVarAfterEq', (we can inspect its values
+        % from the diagnostic structure below: 'intraBurstDiagnostic'), we
+        % can see that usually if the total number of detections made by 
+        % the CA-CFAR contains some false alarms, the number of false
+        % alarms is usually equal to the number of outliers in the 
+        % 'noiseVarAfterEq' array. --> we can implement a burst erasure
+        % mechanism here! But only after having properly calibrated the
+        % hyperparameters of the CA-CFAR algorithm:
+        % ('backgroundWindowLength', 'guardLength', 'thresholdK').
+        % use the median value for this, as long as the number of false
+        % detections is less than half the total detections made
+    
     end
     
     % Metric plot outputted only for the first iteration
@@ -798,7 +820,6 @@ function [errMax, ...
     %% 8-PSK Demodulation
     % take the equalized bursts
     rxModulatedBursts = rxEqualizedBurstsDetected;
-
     % Temporary storage indexed by DETECTION order.
     % At this stage column k does NOT necessarily correspond to the 
     % chronologically transmitted burst k. The true burst position will be 
@@ -806,8 +827,7 @@ function [errMax, ...
     rxFramedBurstsPaddedLLR_detected = ...
         zeros(symbolsPerBurst * bitsPerSymbol, numDetectedBursts);
     
-
-    %% Parameters for selective intra-burst erasure
+    % Parameters for decision-directed intra-burst erasure
     localWindowSymbols = 8;
     gammaErasure = inf;   % INITIAL experimental value - to be optimized MC
     HeaderLength = length(syncReference) + ...
@@ -815,8 +835,7 @@ function [errMax, ...
                           numProtectedIndexBits;   
     % First LLR belonging to coded payload
     firstPayloadLLR = HeaderLength + 1;
-
-    % Intra-burst erasure diagnostic
+    % Decision Directed Intra-burst erasure DIAGNOSTIC storage
     intraBurstDiagnostic = struct('noiseVarAfterEq', [], ... 
                                   'sigmaDD', [], ...
                                   'reliabilityRatio', [], ...
@@ -848,8 +867,8 @@ function [errMax, ...
                             'gray', ...
                             'OutputType','approxllr', ... % instead of 'llr' is simpler and more robust, it uses max-log approximation instead of the sum of the likelihoods
                             'NoiseVariance', noiseVariance_k);
-
-
+        
+        % DECISION-DIRECTED
         % Hard 8-PSK decisions
         decidedIndices = pskdemod(rxSymbols_k, ...
                                   M, ...
@@ -861,10 +880,9 @@ function [errMax, ...
                                 pi/M, ...
                                 'gray');    
         % Symbol-wise post-equalization DD residual
-        ddResidual = rxSymbols_k - decidedSymbols;
-        
-        numSymbols = length(rxSymbols_k); % #symbolsPerBurst
-
+        ddResidual = rxSymbols_k - decidedSymbols;        
+        numSymbols = length(rxSymbols_k); % #symbolsPerBurst        
+        % DIAGNOSTIC
         numLocalWindows = ceil(numSymbols / localWindowSymbols);
         sigmaDD_windows = nan(numLocalWindows,1);
         reliabilityRatio_windows = nan(numLocalWindows,1);
@@ -874,38 +892,36 @@ function [errMax, ...
         firstPayloadLLR_windows = nan(numLocalWindows,1);
         lastPayloadLLR_windows = nan(numLocalWindows,1);        
         windowIdx = 0;
-        
+        % DECISION-DIRECTED INTRABURST ERASURE
+        % refers to a signal processing and communication technique where a 
+        % receiver uses its own internal hard or soft decisions (its "best 
+        % guesses" of the transmitted data symbols) as a substitute for 
+        % known training sequences or pilot symbols to adapt filters, track 
+        % channel states, or correct errors.
         % for cycle over the INTRA-BURST WINDOWS
-        for firstSymbol = 1:localWindowSymbols:numSymbols    
-
+        for firstSymbol = 1:localWindowSymbols:numSymbols
             windowIdx = windowIdx + 1;
-
             lastSymbol = min(firstSymbol + localWindowSymbols - 1, numSymbols);
             symbolIndices = firstSymbol:lastSymbol;    
             % Local DD residual power
             sigmaDD_m = mean(abs(ddResidual(symbolIndices)).^2);    
             % Normalize against the GLOBAL post-EQ pilot estimate
-            reliabilityRatio = sigmaDD_m / max(noiseVariance_k, 1e-12);
-            
+            reliabilityRatio = sigmaDD_m / max(noiseVariance_k, 1e-12);            
             % LLR range corresponding to the current SYMBOL window
             firstLLR_window = (firstSymbol - 1)*bitsPerSymbol + 1;
-            lastLLR_window  = lastSymbol*bitsPerSymbol;
-            
+            lastLLR_window  = lastSymbol*bitsPerSymbol;            
             % Select ONLY the portion belonging to the coded payload.
             % This protects:
             %   - sync reference bits
             %   - phase reference bits
             %   - protected burst-index bits
             firstLLR_toErase = max(firstLLR_window, firstPayloadLLR);
-            lastLLR_toErase  = lastLLR_window;
-            
+            lastLLR_toErase  = lastLLR_window;            
             isErased = false; % for diagnostic
-
             if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
                 burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
                 isErased = true; % for diagnostic
-            end
-            
+            end            
             % for diagnostic
             sigmaDD_windows(windowIdx) = sigmaDD_m;
             reliabilityRatio_windows(windowIdx) = reliabilityRatio;
@@ -917,7 +933,6 @@ function [errMax, ...
                 firstPayloadLLR_windows(windowIdx) = firstLLR_toErase;
                 lastPayloadLLR_windows(windowIdx) = lastLLR_toErase;
             end
-
         end
         
         % Diagnostic storage

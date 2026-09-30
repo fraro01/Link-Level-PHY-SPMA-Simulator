@@ -80,12 +80,12 @@ function [rxOut, vettore] = agc_model(rxIn, Fs)
         x = rxIn(idx); % related samples
 
         % TODO! BASED ON THE POWER LEVEL, SET A POSSIBLE "IDLE" STATE?
-        % 'continue' MAY EXIT THE FOR CYCLE
+        % 'continue' --> EXIT THE FOR CYCLE
         % based on the 'vettore' that you get from the 'main.m', plot it,
-        % and then set the proper threshold of the follwing IDLE state
+        % and then set the proper threshold of the following IDLE state
         % accordingly.
         vettore = [vettore; sqrt(mean(abs(x).^2))];
-    %{%}
+        %{%}
         % it also resembles the logic of the Squelch of the radio
         if sqrt(mean(abs(x).^2)) <= 0.05 % NOTE! this strongly improves EVM 
             rxOut(idx) = 0; % if no transmission is found set the level to zero!
