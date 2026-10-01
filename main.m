@@ -52,7 +52,7 @@ indexingData = load('optimizedIndexing.mat', ...
                      'friendIndexCodeword');
 burstIndexCodebook = indexingData.burstIndexCodebook;
 friendIndexCodeword = indexingData.friendIndexCodeword;
-rng(15234); % set 'shuffle' to keep it random at each iteration, otherwise  
+rng(42); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
@@ -80,13 +80,15 @@ blankingPercentage = 0.0; % percentage with respect to the time 'txSignal'
 % representing the time occupied by the RX node while is transmitting
 
 %% RECEIVER PARAMETERS
+% This is just a safety margin chosen arbitrarily for safety indeed.
 channelEstMargin = 2; % especially important for fractional delays, when 
 % the significative energy of the channel symbol-spaced extends beyond the 
-% prediction on the maximum delay
+% prediction on the maximum delay. 
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 50; % simulation cycles 33
+metrics.packets = 100; % simulation cycles 33
+show_metrics_plots = true; % whether to show the metric plots or not
 
 % for storing values we use a MATLAB 'Structure'
 metrics.detections = 0; % number of detections made by the CA-CFAR algorith
@@ -102,7 +104,6 @@ metrics.errMax_runs = zeros(1, metrics.packets);
 metrics.SINR_runs = zeros(1, metrics.packets); % SINR linear
 metrics.EbN0_linear_runs = zeros(1, metrics.packets); % E_b/N_0 linear
 metrics.EVM_runs = zeros(numBursts, metrics.packets); % EVM percentage
-show_metrics_plots = true; % whether to show the metric plots or not
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% SIMULATION LOOP

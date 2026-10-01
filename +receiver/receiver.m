@@ -93,18 +93,22 @@ function [errMax, ...
         'DecimationFactor', 1);
         
     % ADAPTIVE DETECTION THRESHOLD
+    % the 3 hyperparameters/thresholds below: 'backgroundWindowLength', 
+    % 'guardLength', 'thresholdK'; are validated through Monte Carlo 
+    % campaigns, find the results and the method used in the Excel file: 
+    % 'Montecarlo campaigns for thresholds validation'
     % Number of correlation samples used to estimate the local correlation 
     % background.
-    backgroundWindowLength = 500;    
+    backgroundWindowLength = 500; % validated with Monte Carlo
     % Number of correlation samples excluded around the candidate under test.
     % This avoids contaminating the background estimate with the useful peak.
     % if 'guardLength = 0 --> exclude ONLY the CUT (Candidate Under Test)'
-    guardLength = numSyncSymbols * ( 32 / 100 );   
+    guardLength = numSyncSymbols * ( 32 / 100 ); % validated with Monte Carlo
     % Number of standard deviations above the local correlation background.
-    thresholdK = 10;  
+    thresholdK = 10; % validated with Monte Carlo
     % Minimum usable fraction of synchronization symbols after blanking.
     % Blanking Compensation variable threshold
-    minUsableSyncFraction = 0.33;
+    minUsableSyncFraction = 0.20;
     % this parameter sets the minimum fraction of sync symbols not-blanked by  
     % which we can still try to recover the burst
     % (usable_sync_symbols/total_sync_symbols).
@@ -828,8 +832,11 @@ function [errMax, ...
         zeros(symbolsPerBurst * bitsPerSymbol, numDetectedBursts);
     
     % Parameters for decision-directed intra-burst erasure
-    localWindowSymbols = 8;
-    gammaErasure = inf;   % INITIAL experimental value - to be optimized MC
+    % The two hyperparameters/thresholds below are validated through Monte 
+    % Carlo campaigns, find the results and the method used in the Excel 
+    % file: 'Montecarlo campaigns for thresholds validation'
+    localWindowSymbols = 14; % validated with Monte Carlo
+    gammaErasure = 75;   % validated with Monte Carlo
     HeaderLength = length(syncReference) + ...
                           length(phaseReference) + ...
                           numProtectedIndexBits;   
@@ -1073,7 +1080,10 @@ function [errMax, ...
         %}
 
         % NOTE! POSSIBLE BURST ERASURE CASE!
-        if indexReliability < 10
+        % The hyperparameter/threshold below is validated through Monte 
+        % Carlo campaigns, find the results and the method used in the 
+        % Excel file: 'Montecarlo campaigns for thresholds validation'
+        if indexReliability < 5
             continue;
         end
 

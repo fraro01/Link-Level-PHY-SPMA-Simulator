@@ -78,18 +78,19 @@ function [rxOut, vettore] = agc_model(rxIn, Fs)
         idxEnd = min(n + samplesPerUpdate - 1, length(rxIn)); % indices 
         idx = n:idxEnd; % array of sample indices
         x = rxIn(idx); % related samples
-
-        % TODO! BASED ON THE POWER LEVEL, SET A POSSIBLE "IDLE" STATE?
-        % 'continue' --> EXIT THE FOR CYCLE
-        % based on the 'vettore' that you get from the 'main.m', plot it,
-        % and then set the proper threshold of the following IDLE state
-        % accordingly.
-        vettore = [vettore; sqrt(mean(abs(x).^2))];
+        
+        %% IDLE STATE / SQUELCH
+        % The hyperparameter/threshold below is validated through Monte 
+        % Carlo campaigns, find the results and the method used in the 
+        % Excel file: 'Montecarlo campaigns for thresholds validation'. 
+        % Just for an initial empirical view, plot the 'vettore' that you 
+        % get from the 'main.m' .
+        vettore = [vettore; sqrt(mean(abs(x).^2))]; %#ok<AGROW>
         %{%}
         % it also resembles the logic of the Squelch of the radio
-        if sqrt(mean(abs(x).^2)) <= 0.05 % NOTE! this strongly improves EVM 
+        if sqrt(mean(abs(x).^2)) <= 0.025
             rxOut(idx) = 0; % if no transmission is found set the level to zero!
-            continue
+            continue % 'continue' --> EXIT THE FOR CYCLE
         end
     
         %% 1. APPLY CURRENT RF GAIN
