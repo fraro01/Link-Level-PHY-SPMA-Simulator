@@ -94,9 +94,9 @@ function [errMax, ...
         
     % ADAPTIVE DETECTION THRESHOLD
     % the 3 hyperparameters/thresholds below: 'backgroundWindowLength', 
-    % 'guardLength', 'thresholdK'; are validated through Monte Carlo 
-    % campaigns, find the results and the method used in the Excel file: 
-    % 'Montecarlo campaigns for thresholds validation'
+    % 'guardLength', 'thresholdK', 'minUsableSyncFraction'; are validated 
+    % through Monte Carlo campaigns, find the results and the method used 
+    % in the Excel file: 'Montecarlo campaigns for thresholds validation'
     % Number of correlation samples used to estimate the local correlation 
     % background.
     backgroundWindowLength = 500; % validated with Monte Carlo
@@ -108,7 +108,7 @@ function [errMax, ...
     thresholdK = 10; % validated with Monte Carlo
     % Minimum usable fraction of synchronization symbols after blanking.
     % Blanking Compensation variable threshold
-    minUsableSyncFraction = 0.20;
+    minUsableSyncFraction = 0.4;
     % this parameter sets the minimum fraction of sync symbols not-blanked by  
     % which we can still try to recover the burst
     % (usable_sync_symbols/total_sync_symbols).

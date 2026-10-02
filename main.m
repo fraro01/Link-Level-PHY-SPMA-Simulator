@@ -76,7 +76,7 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 numInterferers = 0; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
-blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
+blankingPercentage = 0.1; % percentage with respect to the time 'txSignal' 
 % representing the time occupied by the RX node while is transmitting
 
 %% RECEIVER PARAMETERS
@@ -90,7 +90,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 metrics.packets = 100; % simulation cycles 33
 show_metrics_plots = true; % whether to show the metric plots or not
 
-% for storing values we use a MATLAB 'Structure'
+% counters for storing values we use a MATLAB 'Structure'
 metrics.detections = 0; % number of detections made by the CA-CFAR algorith
 metrics.finalEncodedPacketErroredBits = 0; % errored bits in the encoded 
 % packets
