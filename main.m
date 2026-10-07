@@ -52,7 +52,7 @@ indexingData = load('optimizedIndexing.mat', ...
                      'friendIndexCodeword');
 burstIndexCodebook = indexingData.burstIndexCodebook;
 friendIndexCodeword = indexingData.friendIndexCodeword;
-rng(42); % set 'shuffle' to keep it random at each iteration, otherwise  
+rng('shuffle'); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
@@ -76,7 +76,7 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 numInterferers = 0; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
-blankingPercentage = 0.1; % percentage with respect to the time 'txSignal' 
+blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
 % representing the time occupied by the RX node while is transmitting
 
 %% RECEIVER PARAMETERS
@@ -87,7 +87,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 100; % simulation cycles 33
+metrics.packets = 1; % simulation cycles 33
 show_metrics_plots = true; % whether to show the metric plots or not
 
 % counters for storing values we use a MATLAB 'Structure'

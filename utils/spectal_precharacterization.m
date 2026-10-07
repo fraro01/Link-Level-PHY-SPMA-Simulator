@@ -13,23 +13,26 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % use an Equivalent Baseband representation of the SINGLE waveform and
-% exclude the Time-Frequency Hopping. Since the RF traslation does not 
-% change the waveform spectrum shape, and the time-frequency hopping scheme
-% would only replicate the waveform N times around the chosen N carriers.
+% exclude the Time-Frequency Hopping. 
+% Since the RF traslation does not change the waveform spectrum shape, and 
+% the time-frequency hopping scheme would only replicate the waveform N 
+% times around the chosen N carriers.
 
 % IMPORTANT: in order to properly execute this script, at first, run the
 % MATLAB link-level simulator, so to retrieve its workspace.
 
 clc;
 % whether you want to compare multiple figure/plot
-%close all;
+% close all;
 
 
 %% Symbol rate for a nominal 13 MHz channel
+%% tweak the parameters of this block, to obtain different analysis!
+channelBandwidth = ((fMax - fMin)/numFrequencyChannels);
 %{%}
 % rolloff = 0.35; % [0;1]
-% filterSpan = 10; % in symbols
- channelBandwidth = 13e6;
+% filterSpan = 8; % in symbols
+% channelBandwidth = 13e6;
 % symbolRate = channelBandwidth / (1 + rolloff); % NOTE! this, with filterSpan 
 % are the two things that slightly enlarge the variable: 'burstTxTime'
 % Fs = symbolRate * samplesPerSymbol;
@@ -44,19 +47,19 @@ txRRCspectral = comm.RaisedCosineTransmitFilter( ...
     'OutputSamplesPerSymbol',samplesPerSymbol);
 % container for wich each cell can  contain data of different types and 
 idealShapedBursts = cell(numBursts,1); % dimensions
-for k = 1:numBursts % iterate over all 28 bursts
+for k = 1:numBursts % iterate over all 28 bursts, the process is exactly 
+    % the same as for the transmitter
     reset(txRRCspectral); % clean the filter memory per each burst
-    burstSymbols = [ ...
-        txSCFDEBursts(:,k); % take the burst after the SC-FDE has added CP
-        zeros(filterSpan,1) % Add zeros to flush the TX/RX filter memory response tail
-    ];
+    burstSymbols = [txSCFDEBursts(:,k); % take the burst after the SC-FDE has added CP
+                    zeros(filterSpan,1) % Add zeros to flush the TX/RX filter memory response tail
+                   ];
     % retrieve the cell
     idealShapedBursts{k} = txRRCspectral(burstSymbols); % pulse shaping
 end
 % concatenate vertically the content
-% txWaveformIdeal = vertcat(idealShapedBursts{:});
+txWaveformIdeal = vertcat(idealShapedBursts{:});
 % NOTE! INTERESTING TO CHECK!
-txWaveformIdeal = txSignal;
+% txWaveformIdeal = txSignal;
 % txWaveformIdeal = interferer_waveform;
 % txWaveformIdeal = blankingMask;
 
@@ -147,7 +150,7 @@ groos_throughput_without_DC = symbolRate*log2(M);
 gross_throughput_with_DC = symbolsPerBurstWithCP*bitsPerSymbol / ...
             ((symbolsPerBurstWithCP/symbolRate)/dutyCycle);
 
-%% Results
+%% Text Report Results
 fprintf('\n--- SPECTRAL PRE-CHARACTERIZATION ---\n'); % title
 fprintf('Roll-off: %.0f%%, Filter Span: %.0f symbols\n', rolloff*100, ... 
                         filterSpan); % fundamental parameters used

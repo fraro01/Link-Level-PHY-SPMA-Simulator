@@ -260,116 +260,118 @@ function interferer_waveform = interferers( ...
                 txSignal(startSample:endSample) + burstUpconverted;
         end
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %                   CHANNEL GENERATION PER INTERFER                   %
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %% 1. Topology
-    % x = a + (b-a)*rand(); generates a a number picked uniformly between:
-    % [a; b]
-    distance_i = 0 + (500000 - 0)*rand(); % [m]
-    velocity_i = 0 + (1372 - 0)*rand();   % [m/s]
-    angle_i = randi([0 180]);             % degree
-    %% 2. Power and Generic Gain Settings
-    % transmitter power
-    txPower_dBm = randi([40 48]); % [dBm]
-    propagationGeneralGain = 0 + (13 - 0)*rand(); % [dB]
-    %% 3. Normalize the Interferer waveform to the selected TX Interf power
-    % txSignal currently has arbitrary normalized MATLAB units.
-    % Select only active transmitted samples (ommit empty tx intervals).
-    txActiveSamples = abs(txSignal) > 1e-12;
-    if ~any(txActiveSamples)
-        error('The transmitted waveform contains no active samples.');
-    end
-    % Average power of the current normalized MATLAB waveform.
-    txSignalPowerArbitrary = mean(abs(txSignal(txActiveSamples)).^2);
-    % Convert transmitter power from dBm to watts. 
-    txPower_W = 10^((txPower_dBm - 30)/10); % standard formula
-    % FUNDAMENTAL SCALING: |txSignalPhysical|^2 is interpreted as instantaneous
-    % power in watts, and its active-sample average is txPower_W.
-    txSignalPhysical = txSignal .* sqrt(txPower_W / txSignalPowerArbitrary);
-    % square root is necessary since we are modifying the amplitude
-    %% 4. Free Space Path Loss and Link Budget
-    speedOfLight_mps = physconst('LightSpeed'); % for the wavelength calculus
-    % Sample-wise propagation attenuation.
-    largeScaleAmplitude = zeros(size(txSignalPhysical));
-    % one value for each burst.
-    fsplPerBurst_dB = zeros(numBursts,1);
-    % different bursts are on different carriers leading to different FSPL
-    for k = 1:numBursts %iterate over all the N bursts
-        % Actual RF carrier used by burst k.
-        carrierHz = carrierForBurst(k);
-        % Wavelength corresponding to the current carrier.
-        wavelength_m = speedOfLight_mps / carrierHz;
-        % Free Space Path Loss in dB.
-        fsplPerBurst_dB(k) = fspl(distance_i, wavelength_m);
-        % Propagation gain excluding txPower_dBm.
-        % txPower_dBm is excluded because txSignalPhysical has already
-        % been normalized to the actual transmitter power.
-        % link budget calculation
-        propagationGain_dB = propagationGeneralGain - fsplPerBurst_dB(k); 
-        % Convert power gain in dB into an amplitude multiplier.
-        propagationAmplitudeGain = 10^(propagationGain_dB/20);
-        % First sample occupied by the pulse-shaped burst.
-        burstStartSample = round(startTimes(k)*Fs) + 1;
-        % Include useful waveform and RRC filter tail.
-        burstLengthSamples = ...
-            (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
-        burstEndSample = min( ...
-            burstStartSample + burstLengthSamples - 1, ...
-            length(txSignalPhysical));
-        % Assign the attenuation to samples belonging to this burst.
-        largeScaleAmplitude(burstStartSample:burstEndSample) = ...
-            propagationAmplitudeGain;
-    end
-    % Apply large-scale gains and losses. (expressed as amplitude, not power)
-    txSignalAfterLinkBudget = txSignalPhysical .* largeScaleAmplitude;
-    %% 5. Doppler Parameters
-    % Corresponding wavelength.
-    minimumWavelength_m = speedOfLight_mps / fMax;
-    centralWavelength_m = speedOfLight_mps / fCenter;
-    % Conservative maximum Doppler magnitude used to parametrize the
-    % diffuse fading process of all channel paths, for doppler spread spectrum
-    maximumDopplerShift_Hz = velocity_i / minimumWavelength_m;
-    % Signed Doppler shift of the direct LOS component
-    directPathDopplerShift_Hz = velocity_i / centralWavelength_m;
-    %% 6. Multipath & Fading
-    pathDelays_s = [0, ...
-                    1/(symbolRate) + (2/symbolRate - 1/(symbolRate))*rand(), ...
-                    2/symbolRate + (3/symbolRate - 2/(symbolRate))*rand()];
-    averagePathGains_dB = [0, ... % 0 gain with respect to reference (itself is taken as reference indeed it makes sense zero)
-                           randi([-16 -8]), ... % with -12 dB --> the path has 6.31% of the power of the first path, or equivalently a 16th
-                           randi([-22 -14])];
-    ricianKFactor = [randi([25 35]), ...
-                     0, ... % the deterministic compoment LOS power is 0 --> Rayleigh channel
-                     0];    
-    ricianChannel = comm.RicianChannel( ...
-        'SampleRate', Fs, ... % how many samples per second the channel contains
-        'PathDelays', pathDelays_s, ... % seconds
-        'AveragePathGains', averagePathGains_dB, ... % average power of each path
-        'NormalizePathGains', true, ... % normalize the total average power of all the paths of the multipath to 1 (otherwise is greater), see below
-        'KFactor', ricianKFactor, ... % ratio between power of LOS component / power casual of diffuse component
-        'DirectPathDopplerShift', [directPathDopplerShift_Hz*cosd(angle_i) directPathDopplerShift_Hz*cosd(45) directPathDopplerShift_Hz*cosd(5)], ... % doppler of the LOS component of each Rician path; it is applied only for Rician paths
-        'DirectPathInitialPhase', [0 pi/3 -pi/2], ... % initial phase of LOS component of each Rician path; they depend on the distance TX-RX. It represents the phase with which the specific path arrives at the RX when the simulation starts.
-        'MaximumDopplerShift', maximumDopplerShift_Hz, ... % maximum Doppler magnitude of the diffuse fading components paths
-        'PathGainsOutputPort', false, ... % returns also the instaneous gains of all the paths
-        'RandomStream', 'Global stream'); % keeps generating casual fading components
-    % Apply time-varying multipath channel.
-    interfererTXWaveformFaded = ricianChannel(txSignalAfterLinkBudget);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %                  END CHANNEL GENERATION PER INTERFER                %
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-    % since 'txSignal' and 'interfer_waveform' might have different lengths
-    % we bring them to the same length, with zero-padding
-    if isscalar(interferer_waveform) && interferer_waveform == 0
-    interferer_waveform = interfererTXWaveformFaded;
-    else
-        maxLength = max(length(interferer_waveform), ...
-                length(interfererTXWaveformFaded));
-        interferer_waveform(end+1:maxLength, 1) = 0;
-        interfererTXWaveformFaded(end+1:maxLength, 1) = 0;
-        interferer_waveform = interferer_waveform + interfererTXWaveformFaded;
-    end
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %                   CHANNEL GENERATION PER INTERFER                   %
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %% 1. Topology
+        % x = a + (b-a)*rand(); generates a a number picked uniformly between:
+        % [a; b]
+        distance_i = 0 + (500000 - 0)*rand(); % [m]
+        % 1372 m/s = Mach 4
+        velocity_i = 0 + (1372 - 0)*rand();   % [m/s] % since it represents the 
+        % RELATIVE velocity between the two entities it could be 0 indeed!
+        angle_i = randi([0 180]);             % degree
+        %% 2. Power and Generic Gain Settings
+        % transmitter power
+        txPower_dBm = randi([40 48]); % [dBm]
+        propagationGeneralGain = 0 + (13 - 0)*rand(); % [dB]
+        %% 3. Normalize the Interferer waveform to the selected TX Interf power
+        % txSignal currently has arbitrary normalized MATLAB units.
+        % Select only active transmitted samples (ommit empty tx intervals).
+        txActiveSamples = abs(txSignal) > 1e-12;
+        if ~any(txActiveSamples)
+            error('The transmitted waveform contains no active samples.');
+        end
+        % Average power of the current normalized MATLAB waveform.
+        txSignalPowerArbitrary = mean(abs(txSignal(txActiveSamples)).^2);
+        % Convert transmitter power from dBm to watts. 
+        txPower_W = 10^((txPower_dBm - 30)/10); % standard formula
+        % FUNDAMENTAL SCALING: |txSignalPhysical|^2 is interpreted as instantaneous
+        % power in watts, and its active-sample average is txPower_W.
+        txSignalPhysical = txSignal .* sqrt(txPower_W / txSignalPowerArbitrary);
+        % square root is necessary since we are modifying the amplitude
+        %% 4. Free Space Path Loss and Link Budget
+        speedOfLight_mps = physconst('LightSpeed'); % for the wavelength calculus
+        % Sample-wise propagation attenuation.
+        largeScaleAmplitude = zeros(size(txSignalPhysical));
+        % one value for each burst.
+        fsplPerBurst_dB = zeros(numBursts,1);
+        % different bursts are on different carriers leading to different FSPL
+        for k = 1:numBursts %iterate over all the N bursts
+            % Actual RF carrier used by burst k.
+            carrierHz = carrierForBurst(k);
+            % Wavelength corresponding to the current carrier.
+            wavelength_m = speedOfLight_mps / carrierHz;
+            % Free Space Path Loss in dB.
+            fsplPerBurst_dB(k) = fspl(distance_i, wavelength_m);
+            % Propagation gain excluding txPower_dBm.
+            % txPower_dBm is excluded because txSignalPhysical has already
+            % been normalized to the actual transmitter power.
+            % link budget calculation
+            propagationGain_dB = propagationGeneralGain - fsplPerBurst_dB(k); 
+            % Convert power gain in dB into an amplitude multiplier.
+            propagationAmplitudeGain = 10^(propagationGain_dB/20);
+            % First sample occupied by the pulse-shaped burst.
+            burstStartSample = round(startTimes(k)*Fs) + 1;
+            % Include useful waveform and RRC filter tail.
+            burstLengthSamples = ...
+                (symbolsPerBurstWithCP + extraSymbols) * samplesPerSymbol;
+            burstEndSample = min( ...
+                burstStartSample + burstLengthSamples - 1, ...
+                length(txSignalPhysical));
+            % Assign the attenuation to samples belonging to this burst.
+            largeScaleAmplitude(burstStartSample:burstEndSample) = ...
+                propagationAmplitudeGain;
+        end
+        % Apply large-scale gains and losses. (expressed as amplitude, not power)
+        txSignalAfterLinkBudget = txSignalPhysical .* largeScaleAmplitude;
+        %% 5. Doppler Parameters
+        % Corresponding wavelength.
+        minimumWavelength_m = speedOfLight_mps / fMax;
+        centralWavelength_m = speedOfLight_mps / fCenter;
+        % Conservative maximum Doppler magnitude used to parametrize the
+        % diffuse fading process of all channel paths, for doppler spread spectrum
+        maximumDopplerShift_Hz = velocity_i / minimumWavelength_m;
+        % Signed Doppler shift of the direct LOS component
+        directPathDopplerShift_Hz = velocity_i / centralWavelength_m;
+        %% 6. Multipath & Fading
+        pathDelays_s = [0, ...
+                        1/(symbolRate) + (2/symbolRate - 1/(symbolRate))*rand(), ...
+                        2/symbolRate + (3/symbolRate - 2/(symbolRate))*rand()];
+        averagePathGains_dB = [0, ... % 0 gain with respect to reference (itself is taken as reference indeed it makes sense zero)
+                               randi([-16 -8]), ... % with -12 dB --> the path has 6.31% of the power of the first path, or equivalently a 16th
+                               randi([-22 -14])];
+        ricianKFactor = [randi([25 35]), ...
+                         0, ... % the deterministic compoment LOS power is 0 --> Rayleigh channel
+                         0];    
+        ricianChannel = comm.RicianChannel( ...
+            'SampleRate', Fs, ... % how many samples per second the channel contains
+            'PathDelays', pathDelays_s, ... % seconds
+            'AveragePathGains', averagePathGains_dB, ... % average power of each path
+            'NormalizePathGains', true, ... % normalize the total average power of all the paths of the multipath to 1 (otherwise is greater), see below
+            'KFactor', ricianKFactor, ... % ratio between power of LOS component / power casual of diffuse component
+            'DirectPathDopplerShift', [directPathDopplerShift_Hz*cosd(angle_i) directPathDopplerShift_Hz*cosd(45) directPathDopplerShift_Hz*cosd(5)], ... % doppler of the LOS component of each Rician path; it is applied only for Rician paths
+            'DirectPathInitialPhase', [0 pi/3 -pi/2], ... % initial phase of LOS component of each Rician path; they depend on the distance TX-RX. It represents the phase with which the specific path arrives at the RX when the simulation starts.
+            'MaximumDopplerShift', maximumDopplerShift_Hz, ... % maximum Doppler magnitude of the diffuse fading components paths
+            'PathGainsOutputPort', false, ... % returns also the instaneous gains of all the paths
+            'RandomStream', 'Global stream'); % keeps generating casual fading components
+        % Apply time-varying multipath channel.
+        interfererTXWaveformFaded = ricianChannel(txSignalAfterLinkBudget);
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %                  END CHANNEL GENERATION PER INTERFER                %
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+        % since 'txSignal' and 'interfer_waveform' might have different lengths
+        % we bring them to the same length, with zero-padding
+        if isscalar(interferer_waveform) && interferer_waveform == 0
+        interferer_waveform = interfererTXWaveformFaded;
+        else
+            maxLength = max(length(interferer_waveform), ...
+                    length(interfererTXWaveformFaded));
+            interferer_waveform(end+1:maxLength, 1) = 0;
+            interfererTXWaveformFaded(end+1:maxLength, 1) = 0;
+            interferer_waveform = interferer_waveform + interfererTXWaveformFaded;
+        end
 
     end
 
