@@ -79,6 +79,8 @@ classdef CalculateMetrics
             end        
         end
         
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
         % For displaying values in the final Report
         function metrics_calculated = final_values(metrics, ...
                 numEncodedBits, packetLength, numBursts)

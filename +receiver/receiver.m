@@ -270,7 +270,7 @@ function [errMax, ...
                 % to cope with phase rotation of the channel, the modulus
                 % reimans unchanged while the angle could change
             end
-    
+            
             %% BLANKING COMPENSATION
             % rxChannelMatched is referred directly to the complete RX
             % timeline, and is delayed by the RX RRC group delay, so that
@@ -397,10 +397,9 @@ function [errMax, ...
         % REORDERING', in the '8-PSK DEMODULATION' block, we will keep only 
         % the bursts with the proper indexing numbers.
         [peakScores, peakCandidateIndices] = ...
-            findpeaks( ...
-                    detectionScore, ...
-                    'MinPeakHeight', 1 ... % score >= 1 --> threshold overcome     
-                 ); 
+            findpeaks(detectionScore, ...
+                      'MinPeakHeight', 1 ... % score >= 1 --> threshold overcome     
+                      ); 
                 % 'MinPeakDistance', minPeakDistanceSamples ... % avoid interpreting different close samples of the same maximum as different bursts
                 
 
@@ -408,7 +407,7 @@ function [errMax, ...
         for p = 1:length(peakCandidateIndices) % how many peaks were found
             candidateIdx = peakCandidateIndices(p);    
             % Convert metric index into matched-filter sample index.
-            firstSyncSample = firstCandidate + candidateIdx - 1;    
+            firstSyncSample = firstCandidate + candidateIdx - 1; 
             newDetection.firstSyncSample = firstSyncSample;    
             newDetection.channelIndex = ch;    
             newDetection.frequency = fRel;    
@@ -590,7 +589,7 @@ function [errMax, ...
     
         %% 9.5. CONVERT PHASE SLOPE TO CFO
         % phase_variation_per_symbol = [2π * ​Δf] / Symbol_Rate
-        % thus: Δf = [phase_variation_per_symbol * Symbol_Rate] / 2*pi​
+        % thus: Δf = [phase_variation_per_symbol * Symbol_Rate] / 2*π​
         estimatedCarrierFrequencyOffset_Hz(k) = ...
             estimatedPhaseSlope_radPerSymbol * symbolRate / (2*pi);
         % Wrap the initial phase estimate to the interval [-pi, +pi].
@@ -621,8 +620,7 @@ function [errMax, ...
         % correct the burst symbols with the opposite (-1j) of the impairments 
         % that were introduced by the channel
         rxBurstSymbolsCarrierCorrected = ...
-            rxBurstSymbols .* ...
-            exp(-1j*estimatedCarrierPhaseEvolution);
+                rxBurstSymbols .* exp(-1j*estimatedCarrierPhaseEvolution);
     
         % finally at the very end now save the corrected received burst
         rxSCFDEBursts(:,k) = rxBurstSymbolsCarrierCorrected;
