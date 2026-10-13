@@ -887,7 +887,10 @@ function [errMax, ...
         ddResidual = rxSymbols_k - decidedSymbols;        
         numSymbols = length(rxSymbols_k); % #symbolsPerBurst        
         % DIAGNOSTIC
-        numLocalWindows = ceil(numSymbols / localWindowSymbols);
+        % exclude the preamble for the residual calculus
+        firstPayloadSymbol = floor(HeaderLength / bitsPerSymbol) + 1;
+        numPayloadSymbolsDD = max(0, numSymbols - firstPayloadSymbol + 1);
+        numLocalWindows = ceil(numPayloadSymbolsDD / localWindowSymbols);
         sigmaDD_windows = nan(numLocalWindows,1);
         reliabilityRatio_windows = nan(numLocalWindows,1);
         erasedWindow = false(numLocalWindows,1);        
@@ -903,7 +906,7 @@ function [errMax, ...
         % known training sequences or pilot symbols to adapt filters, track 
         % channel states, or correct errors.
         % for cycle over the INTRA-BURST WINDOWS
-        for firstSymbol = 1:localWindowSymbols:numSymbols
+        for firstSymbol = firstPayloadSymbol:localWindowSymbols:numSymbols
             windowIdx = windowIdx + 1;
             lastSymbol = min(firstSymbol + localWindowSymbols - 1, numSymbols);
             symbolIndices = firstSymbol:lastSymbol;    
