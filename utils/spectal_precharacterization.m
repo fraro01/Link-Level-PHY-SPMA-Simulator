@@ -174,52 +174,130 @@ fprintf('Gross throughput with Duty Cycle: %.3f Mb/s\n', ...
 fprintf('------------------------------------------\n'); % report end
 
 %% Single summary plot
-figure; % open the graphical window
-plot(frequencyAxis_Hz/1e6, ...
-     psdSmoothed_dBc, ...
-    'LineWidth',1.2);
-grid on; % activate the grid on the graph
-hold on; % allow to write over the already present plot without erasing it
-% Nominal MHz channel limits
-xline(-channelBandwidth/2/1e6, '--', ...
-    sprintf('-%.3f MHz', channelBandwidth/2/1e6));
-xline(channelBandwidth/2/1e6, '--', ...
-    sprintf('%.3f MHz', channelBandwidth/2/1e6));
-% Occupied bandwidth limits 
-xline(frequencyAxis_Hz(lowerIndex99)/1e6,'-.','OBW 99%');
-xline(frequencyAxis_Hz(upperIndex99)/1e6,'-.');
-xline(frequencyAxis_Hz(lowerIndex999)/1e6,':','OBW 99.9%');
-xline(frequencyAxis_Hz(upperIndex999)/1e6,':');
-% Reference levels
-yline(-40,'--','-40 dBc');
-yline(-50,'--','-50 dBc');
-yline(-60,'--','-60 dBc');
-xlabel('Frequency relative to carrier [MHz]');
-ylabel('PSD relative to peak [dB]');
-title(sprintf(['Waveform Spectral Pre-characterization\n' ...
-               'Nominal Channel Bandwidth: %.3f MHz\n' ...
-               'Roll-off: %.0f%%, Filter Span: %.0f symbols'], ...
-               channelBandwidth/1e6, ...
-               rolloff*100, ...
-               filterSpan));
-xlim([-25 25]); % view limits
-ylim([-100 5]); % view limits
-hold off; % release the hold on
+if size(txWaveformIdeal) == size(txSignal) & txWaveformIdeal == txSignal
 
+    figure; % open the graphical window
+    plot(frequencyAxis_Hz/1e6, ...
+         psdSmoothed_dBc, ...
+        'LineWidth',1.2);
+    grid on; % activate the grid on the graph
+    hold on; % allow to write over the already present plot without erasing it
+    
+    % Occupied bandwidth limits 
+    xline(relativeCarrierFrequencies(1)/1e6,'--','f_{1}', ...
+            'FontSize', 16, ...
+            'FontWeight', 'bold', ...
+            'LabelVerticalAlignment', 'middle');
+    xline(relativeCarrierFrequencies(2)/1e6,'--','f_{2}', ...
+            'FontSize', 16, ...
+            'FontWeight', 'bold', ...
+            'LabelVerticalAlignment', 'middle');
+    xline(relativeCarrierFrequencies(3)/1e6,'--','f_{3}', ...
+            'FontSize', 16, ...
+            'FontWeight', 'bold', ...
+            'LabelVerticalAlignment', 'middle');
+    xline(relativeCarrierFrequencies(4)/1e6,'--','f_{4}', ...
+            'FontSize', 16, ...
+            'FontWeight', 'bold', ...
+            'LabelVerticalAlignment', 'middle');
 
+    % titles
+    xlabel('Equivalent Complex Baseband Frequencies [MHz]');
+    ylabel('PSD relative to peak [dB]');
+    title(sprintf(['Transmitted Waveform Spectrum\n' ...
+                   'f_{1}: %.2f MHz, f_{2}: %.2f MHz, ' ...
+                   'f_{3}: %.2f MHz, f_{4}: %.2f MHz'], ...
+                   relativeCarrierFrequencies(1)/1e6, ...
+                   relativeCarrierFrequencies(2)/1e6, ...
+                   relativeCarrierFrequencies(3)/1e6, ...
+                   relativeCarrierFrequencies(4)/1e6));
+    xlim([-50 50]); % view limits
+    ylim([-75 10]); % view limits
+    hold off; % release the hold on 
+
+else
+
+    figure; % open the graphical window
+    plot(frequencyAxis_Hz/1e6, ...
+         psdSmoothed_dBc, ...
+        'LineWidth',1.2);
+    grid on; % activate the grid on the graph
+    hold on; % allow to write over the already present plot without erasing it
+    % Nominal MHz channel limits
+    xline(-channelBandwidth/2/1e6, '--', ...
+        sprintf('-%.3f MHz', channelBandwidth/2/1e6));
+    xline(channelBandwidth/2/1e6, '--', ...
+        sprintf('%.3f MHz', channelBandwidth/2/1e6));
+    % Occupied bandwidth limits 
+    xline(frequencyAxis_Hz(lowerIndex99)/1e6,'-.','OBW 99%');
+    xline(frequencyAxis_Hz(upperIndex99)/1e6,'-.');
+    xline(frequencyAxis_Hz(lowerIndex999)/1e6,':','OBW 99.9%');
+    xline(frequencyAxis_Hz(upperIndex999)/1e6,':');
+    % Reference levels
+    yline(-40,'--','-40 dBc');
+    yline(-50,'--','-50 dBc');
+    yline(-60,'--','-60 dBc');
+    xlabel('Frequency relative to carrier [MHz]');
+    ylabel('PSD relative to peak [dB]');
+    title(sprintf(['Waveform Spectral Pre-characterization\n' ...
+                   'Nominal Channel Bandwidth: %.3f MHz\n' ...
+                   'Roll-off: %.0f%%, Filter Span: %.0f symbols'], ...
+                   channelBandwidth/1e6, ...
+                   rolloff*100, ...
+                   filterSpan));
+    xlim([-25 25]); % view limits
+    ylim([-100 5]); % view limits
+    hold off; % release the hold on
+
+end
 
 %% Time-domain whole waveform envelope
-timeAxis_us = ((0:length(txWaveformIdeal)-1).' / Fs) * 1e6; % microseconds
-figure;
-% absolute value of a complex number is the envelope or magnitude
-plot(timeAxis_us, abs(txWaveformIdeal), 'LineWidth', 1.1); 
-grid on;
-xlabel('Time [\mus]'); % since on the first line we multiplied by 1e6
-ylabel('Magnitude'); % magnitude, abs or envelope
-% title('Whole Baseband Waveform Envelope');
-% title('Interferers Waveform Envelope');
-title('Blanking Mask');
-xlim([timeAxis_us(1), timeAxis_us(end)]);
+if size(txWaveformIdeal) == size(blankingMask) & txWaveformIdeal == blankingMask
+
+    timeAxis_us = ((0:length(txWaveformIdeal)-1).' / Fs) * 1e6; % microseconds
+    figure;
+    % absolute value of a complex number is the envelope or magnitude
+    plot(timeAxis_us, abs(txWaveformIdeal), 'LineWidth', 1.1); 
+    grid on;
+    xlabel('Time [\mus]'); % since on the first line we multiplied by 1e6
+    ylabel('Magnitude'); % magnitude, abs or envelope
+    % title
+    title('Blanking Mask');
+    title(sprintf(['Blanking Mask\n' ...
+                   'Blanking Percentage: %.0f%%, Duty Cycle: %.0f%%'], ...
+                    blankingPercentage*100, dutyCycle*100))
+    xlim([timeAxis_us(1), timeAxis_us(end)]);
+    ylim([-0.0625 1.0625]);
+
+elseif size(txWaveformIdeal) == size(interferer_waveform) & txWaveformIdeal == interferer_waveform
+
+    timeAxis_us = ((0:length(txWaveformIdeal)-1).' / Fs) * 1e6; % microseconds
+    figure;
+    % absolute value of a complex number is the envelope or magnitude
+    plot(timeAxis_us, abs(txWaveformIdeal), 'LineWidth', 1.1); 
+    grid on;
+    xlabel('Time [\mus]'); % since on the first line we multiplied by 1e6
+    ylabel('Magnitude'); % magnitude, abs or envelope
+    %title
+    title(sprintf(['Interferers Waveform Envelope\n' ...
+                   'Interferers: %.0f, Duty Cycle: %.0f%%'], ...
+                    numInterferers, dutyCycle*100))
+    xlim([timeAxis_us(1), timeAxis_us(end)]);
+
+else
+    timeAxis_us = ((0:length(txWaveformIdeal)-1).' / Fs) * 1e6; % microseconds
+    figure;
+    % absolute value of a complex number is the envelope or magnitude
+    plot(timeAxis_us, abs(txWaveformIdeal), 'LineWidth', 1.1); 
+    grid on;
+    xlabel('Time [\mus]'); % since on the first line we multiplied by 1e6
+    ylabel('Magnitude'); % magnitude, abs or envelope
+    % title
+    title(sprintf(['Waveform Envelope\n' ...
+                   'Duty Cycle: %.0f%%'], ...
+                    dutyCycle*100))
+    xlim([timeAxis_us(1), timeAxis_us(end)]);    
+end
 
 %% Select one burst
 burstIndex = 1; % take just the first burst as one burst for reference
