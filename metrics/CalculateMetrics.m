@@ -35,8 +35,10 @@ classdef CalculateMetrics
             activeMask = abs(rxSignalImpaired) > 1e-15;
             noiseWaveform = rxSignalAtAntenna - rxSignalWithInterference;
             signalPower_W = mean(abs(rxSignalImpaired(activeMask)).^2);
+            activeMask = abs(interferer_waveform) > 1e-15;
             interferencePower_W = mean( ...
                 abs(interferer_waveform(activeMask)).^2);
+            activeMask = abs(noiseWaveform) > 1e-15;
             noisePower_W = mean(abs(noiseWaveform(activeMask)).^2);
             sinr_linear = signalPower_W / (interferencePower_W + ...
                 noisePower_W);        

@@ -189,7 +189,7 @@ function [syncReference, ...
         % estimate of the reciproce of the conditioning number of G
         reciprocalCondition = rcond(G);
             % * rcond(G) close to 1 → well conditioned matrix;
-            % * rcond(G) small → bad copnditioned matrix;
+            % * rcond(G) small → bad conditioned matrix;
             % * rcond(G) close to 0 → singular matrix.
         % if we have a bad conditioning value --> skip to the other
         % preamble generation
