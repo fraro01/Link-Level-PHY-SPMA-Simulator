@@ -1,0 +1,28 @@
+====================================================
+OPTIMIZED LINK-LEVEL PREAMBLE
+====================================================
+Preamble length	96 bits
+Modulation	8-PSK
+Number of pilot symbols	32
+Design channel length	6 taps
+Monte Carlo candidates	1000000
+LS metric trace 〖A^H A〗^(-1)	0.22459934
+Condition number k(A^H A)	1.36313237
+Max sync sidelobe	0.204271
+Max LS-range sidelobe	0.069877
+
+
+
+====================================================
+       OPTIMIZED LINK-LEVEL PREAMBLE
+====================================================
+Preamble length             : 96 bits
+Modulation                  : 8-PSK
+Number of pilot symbols     : 32
+Design channel length       : 6 taps
+Monte Carlo candidates      : 100000000
+
+LS metric trace((A'A)^-1)  : 0.22309435
+Condition number cond(A'A) : 1.19345901
+Max sync sidelobe           : 0.197145
+Max LS-range sidelobe       : 0.047835
