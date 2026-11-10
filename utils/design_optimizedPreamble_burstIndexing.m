@@ -23,7 +23,7 @@ LestDesign = 4 + channelEstMargin;
 %% Monte Carlo search
 % This script is executed OFFLINE, therefore we can afford
 % a relatively large number of candidate sequences.
-numTrials = 1e8; %1e6 %1e8 da provare!
+numTrials = 1e8; %1e6 %1e8
 
 %% Generate optimized preamble and Save Permanently
 [syncReference, ... phaseReference, ...

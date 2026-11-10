@@ -60,7 +60,7 @@ function blankingMask = blanking_mask(rxSignal, ...
             minBlankingBlockSamples = round(1.0 * burstDurationSamples);            
             % Number of blocks
             numBlocks = floor(numBlankedSamples / minBlankingBlockSamples);
-            numBlocks = max(1, numBlocks);    % at least one block        
+            numBlocks = max(1, numBlocks);    % at least one block   
             % Length of each block
             blockLength = floor(numBlankedSamples / numBlocks);            
             % Divide the entire signal into numBlocks regions
