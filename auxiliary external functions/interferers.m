@@ -37,6 +37,8 @@ function [interferer_waveform, ...
                                 cpLength ...
                                 )
     
+    % maximum delay in symbols of the interferers
+    max_interferer_delay = 3; % expressed in symbols
     % initialize the final interferer_waveform
     interferer_waveform = 0;
     % Ground truth of all physically transmitted FRIEND bursts
@@ -352,7 +354,6 @@ function [interferer_waveform, ...
         % Signed Doppler shift of the direct LOS component
         directPathDopplerShift_Hz = velocity_i / centralWavelength_m;
         %% 6. Multipath & Fading
-        max_interferer_delay = 3; % expressed in symbols
         pathDelays_s = [0, ...
                         1/(symbolRate) + (2/symbolRate - 1/(symbolRate))*rand(), ...
                         2/symbolRate + (max_interferer_delay/symbolRate - 2/(symbolRate))*rand()];

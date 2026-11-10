@@ -29,21 +29,18 @@ classdef CalculateMetrics
                   burstDetected, ...
                   modulatedBursts, ...
                   numPilotSymbols, ...
-                  rxEqualizedBursts, ...
-                  numInterferers)                     
+                  rxEqualizedBursts)                     
             %% SINR CALCULUS 
             %% calculated in the 'channel' before the 'receiver'
+            % since the SINR metric calculates the interference and noise
+            % that affect the desired signal, they must be calculated
+            % according to the desired signal, hence to its active mask,
+            % used as a common mask.
             activeMask = abs(rxSignalImpaired) > 1e-15;
             noiseWaveform = rxSignalAtAntenna - rxSignalWithInterference;
             signalPower_W = mean(abs(rxSignalImpaired(activeMask)).^2);
-            activeMask = abs(interferer_waveform) > 1e-15;
-            if numInterferers ~= 0
-                interferencePower_W = mean( ...
-                    abs(interferer_waveform(activeMask)).^2);
-            else
-                interferencePower_W = 0;
-            end
-            activeMask = abs(noiseWaveform) > 1e-15;
+            interferencePower_W = mean( ...
+                abs(interferer_waveform(activeMask)).^2);
             noisePower_W = mean(abs(noiseWaveform(activeMask)).^2);
             sinr_linear = signalPower_W / (interferencePower_W + ...
                 noisePower_W);        

@@ -33,7 +33,7 @@ end
 tunerDelay_s = 1e-6;
 % Set the length of the packet in bits
 packetLength = 1331; % bits
-dutyCycle = 1.0; % percentage TX/RX (0,1]
+dutyCycle = 0.25; % percentage TX/RX (0,1]
 numBursts = 28;
 % FIXED OPTIMIZED PREAMBLE, orthogonality for its delayed copies
 % the sync and the reference bits remain fixed for all bursts
@@ -73,7 +73,7 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 
 %% CHANNEL PARAMETERS
 % INTERFERERS
-numInterferers = 1; % set the number of interferer nodes, NOTE! it 
+numInterferers = 0; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
 blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
@@ -277,8 +277,7 @@ for i = 1:metrics.packets
         burstDetected, ...
         modulatedBursts, ...
         numPilotSymbols, ...
-        rxEqualizedBursts, ...
-        numInterferers);
+        rxEqualizedBursts);
 
     %% CA-CFAR FALSE DETECTIONS METRICS
     % Evaluate CA-CFAR detections against the physical burst ground truth.
