@@ -29,15 +29,20 @@ classdef CalculateMetrics
                   burstDetected, ...
                   modulatedBursts, ...
                   numPilotSymbols, ...
-                  rxEqualizedBursts)                     
+                  rxEqualizedBursts, ...
+                  numInterferers)                     
             %% SINR CALCULUS 
             %% calculated in the 'channel' before the 'receiver'
             activeMask = abs(rxSignalImpaired) > 1e-15;
             noiseWaveform = rxSignalAtAntenna - rxSignalWithInterference;
             signalPower_W = mean(abs(rxSignalImpaired(activeMask)).^2);
             activeMask = abs(interferer_waveform) > 1e-15;
-            interferencePower_W = mean( ...
-                abs(interferer_waveform(activeMask)).^2);
+            if numInterferers ~= 0
+                interferencePower_W = mean( ...
+                    abs(interferer_waveform(activeMask)).^2);
+            else
+                interferencePower_W = 0;
+            end
             activeMask = abs(noiseWaveform) > 1e-15;
             noisePower_W = mean(abs(noiseWaveform(activeMask)).^2);
             sinr_linear = signalPower_W / (interferencePower_W + ...
@@ -81,6 +86,139 @@ classdef CalculateMetrics
             end        
         end
         
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+        % CA-CFAR FALSE DETECTIONS STATISTICS
+        function result = calculate_false_detections( ...
+                                                detections, ...
+                                                desiredGroundTruth, ...
+                                                friendGroundTruth, ...
+                                                fMin, ...
+                                                fMax, ...
+                                                numFrequencyChannels, ...
+                                                Fs, ...
+                                                filterSpan, ...
+                                                cpLength, ...
+                                                samplesPerSymbol, ...
+                                                minCpLength, ...
+                                                max_interferer_delay)
+        
+            % 1. PARAMETERS
+            max_symbol_delay = max(minCpLength, max_interferer_delay);
+            % Initial temporal matching tolerance (in symbols)
+            toleranceSymbols = 3;      
+            assert(toleranceSymbols >= max_symbol_delay, ...
+            ['tolerance symbols too short: toleranceSymbols = %d symbols, ' ...
+             'but at least %d symbols are required by the maximum channel ' ...
+             'delay of both TX and interferers.'], ...
+            toleranceSymbols, max_symbol_delay);
+            toleranceSamples = toleranceSymbols * samplesPerSymbol;        
+            % TX + RX RRC group delay + cyclic prefix
+            syncOffsetSamples = (filterSpan + cpLength) * samplesPerSymbol;
+        
+            % 2. BUILD COMPLETE GROUND TRUTH        
+            % Combine DESIRED and FRIEND bursts
+            allStartTimes = [ ...
+                desiredGroundTruth.startTimes(:); ...
+                friendGroundTruth.startTimes(:)];        
+            allCarrierFrequencies = [ ...
+                desiredGroundTruth.carrierForBurst(:); ...
+                friendGroundTruth.carrierForBurst(:)];        
+            numDesired = numel(desiredGroundTruth.startTimes); % 'numel' counts the number of elements
+            numPhysicalBursts = numel(allStartTimes);        
+            % 1 = DESIRED, 2 = FRIEND
+            burstType = [... # vertical concatenation of the following two arrays
+                ones(numDesired,1); ... % array of ones of equal length of the desired
+                2*ones(numPhysicalBursts-numDesired,1)]; % array of twos of equal length of the friends
+        
+            % 3. EXPECTED SYNCHRONIZATION POSITIONS
+            expectedSyncSamples = ...
+                round(allStartTimes * Fs) + 1 + syncOffsetSamples;        
+            % Convert absolute carrier frequencies into channel indices
+            channelBandwidth = ...
+                (fMax - fMin) / numFrequencyChannels;        
+            carrierFrequencies = ...
+                fMin + channelBandwidth/2 + ...
+                (0:numFrequencyChannels-1)*channelBandwidth;        
+            expectedChannels = zeros(numPhysicalBursts,1);
+            for b = 1:numPhysicalBursts   
+               %[value,   position     ]
+                [~, expectedChannels(b)] = min( ...
+                    abs(carrierFrequencies - allCarrierFrequencies(b)));
+            end
+        
+            % 4. BUILD POSSIBLE DETECTION-BURST ASSOCIATIONS        
+            numDetections = numel(detections);
+            % Columns:
+            % [detectionIndex, physicalBurstIndex, timingError]
+            candidateMatches = zeros(0,3);
+            for d = 1:numDetections        
+                detectionSample = detections(d).firstSyncSample;
+                detectionChannel = detections(d).channelIndex;        
+                for b = 1:numPhysicalBursts        
+                    % Frequency channel must match, if not --> skip to
+                    % following detection
+                    if detectionChannel ~= expectedChannels(b)
+                        continue;
+                    end        
+                    timingError = abs( ...
+                        detectionSample - expectedSyncSamples(b));     
+                    % if they are close enough --> mark it as a detection
+                    if timingError <= toleranceSamples 
+                        % add a new row with the current detection
+                        candidateMatches(end+1,:) = [ ...
+                            d, b, timingError]; %#ok<AGROW>        
+                    end
+                end
+            end
+        
+            % 5. ONE-TO-ONE MATCHING   
+            % NOTE! it is a matching greedy search: if there are close
+            % bursts in the same channel, a detection could be classified
+            % as a false, even if it could have been true for another burst.
+            % each physical burst can be associated only to one detection
+            % and viceversa.
+            % Prefer associations with the smallest timing error
+            if ~isempty(candidateMatches)        
+                candidateMatches = sortrows(candidateMatches,3);        
+            end        
+            detectionMatched = false(numDetections,1);
+            burstMatched = false(numPhysicalBursts,1);
+            trueDesired = 0;
+            trueFriend = 0;        
+            for m = 1:size(candidateMatches,1) % cycle over the number of rows       
+                d = candidateMatches(m,1); % detectionIndex
+                b = candidateMatches(m,2); % physicalBurstIndex
+        
+                % A detection and a physical burst can be used only once!!!
+                % IF AT LEAST ONE OF THEM IS TRUE --> SKIP TO THE NEXT ROW
+                if detectionMatched(d) || burstMatched(b) 
+                    continue;
+                end
+                detectionMatched(d) = true;
+                burstMatched(b) = true;        
+                if burstType(b) == 1
+                    trueDesired = trueDesired + 1;
+                else
+                    trueFriend = trueFriend + 1;
+                end
+            end
+        
+            % 6. FINAL METRICS
+            result.totalDetections = numDetections;
+            result.trueDetectionsDesired = trueDesired;
+            result.trueDetectionsFriend = trueFriend;        
+            result.trueDetections = trueDesired + trueFriend;        
+            result.falseDetections = numDetections - result.trueDetections;        
+            % False Discovery Proportion
+            if numDetections > 0        
+                result.FDP = result.falseDetections / numDetections;        
+            else        
+                result.FDP = 0;        
+            end
+        
+        end
+
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
         % For displaying values in the final Report
