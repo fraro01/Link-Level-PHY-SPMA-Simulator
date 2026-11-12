@@ -84,8 +84,8 @@ classdef CalculateMetrics
         end
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    
-        % CA-CFAR FALSE DETECTIONS STATISTICS
+        
+        %% CA-CFAR FALSE DETECTIONS STATISTICS
         function result = calculate_false_detections( ...
                                                 detections, ...
                                                 desiredGroundTruth, ...
@@ -218,7 +218,7 @@ classdef CalculateMetrics
 
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-        % For displaying values in the final Report
+        %% For displaying values in the final Report
         function metrics_calculated = final_values(metrics, ...
                 numEncodedBits, packetLength, numBursts)
             % taking advantage of the MATLAB 'struct'
