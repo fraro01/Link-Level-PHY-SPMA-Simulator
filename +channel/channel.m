@@ -344,8 +344,14 @@ function [blankingMask, ...
     % rxSignalAtAntenna = rxSignalWithInterference;
     
     % DIAGNOSTIC check 10*log10(mean(abs(rxSignalAtAntenna).^2))
-    %% 11. Receiver Analog Front-End FIXED Gain (Opposed to AGC, but
+    %% 11. Receiver Analog Front-End Gain (Opposed to AGC, but
     % Complementary)
+    % NOTE! The fixed front-end gain is computed using the average
+    % propagation gain across all bursts, assuming prior knowledge of future
+    % channel conditions.
+    % IMPROVEMENT: Define the gain based on receiver hardware specifications,
+    % expected input power range, and AGC capabilities, independently of the
+    % simulated channel realizations.
     % Analog gain before the normalized ADC model. LNA/IF gain before ADC [dB]
     % Apply a fixed analog front-end gain to bring the signal in reception
     % to make it compliant to our RX ADC.

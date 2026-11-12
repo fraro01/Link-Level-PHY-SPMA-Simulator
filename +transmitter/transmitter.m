@@ -72,7 +72,7 @@ function [packet, ... % original packet with random bits
     bitsPerBurst = ceil(numEncodedBits / numBursts);
     numPaddingBits = bitsPerBurst*numBursts - numEncodedBits;
     % padding the encoded packet with #numPaddingBits zeros added at the end
-    % NOTE! the Rx MUST "unpad" the received packet
+    % the Rx MUST "unpad" the received packet
     encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
     % (bitsPerBurst x numBursts) matrix keeping the order of bits
     bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
@@ -147,8 +147,6 @@ function [packet, ... % original packet with random bits
     
     
     %% Time-Frequency Hopping
-    % NOTE! we are also distribuiting the burst over a pseudo-casual time
-    % pattern.
     % symbol rate = 13 MHz; maximum 17 MHz, check if the one derived is
     % compliant to these numbers.
     % parameters

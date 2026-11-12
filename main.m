@@ -73,7 +73,7 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 
 %% CHANNEL PARAMETERS
 % INTERFERERS
-numInterferers = 0; % set the number of interferer nodes, NOTE! it 
+numInterferers = 1; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
 blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
@@ -87,7 +87,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 10; % simulation cycles
+metrics.packets = 1; % simulation cycles
 show_metrics_plots = true; % whether to show the metric plots or not
 
 % counters for storing values we use a MATLAB 'Structure'
@@ -104,6 +104,9 @@ metrics.errMax_runs = zeros(1, metrics.packets);
 metrics.SINR_runs = zeros(1, metrics.packets); % SINR linear
 metrics.EbN0_linear_runs = zeros(1, metrics.packets); % E_b/N_0 linear
 metrics.EVM_runs = zeros(numBursts, metrics.packets); % EVM percentage
+% CA-CFAR
+
+% DD-SCE Diagnostic
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% SIMULATION LOOP
@@ -227,7 +230,7 @@ for i = 1:metrics.packets
      vettore, ...             % diagnostic
      detections, ...          % diagnostic
      rxMatchedByChannel, ...  % diagnostic
-     numDetectedBursts, ...
+     numDetectedBursts, ... % TODO! ERASEME!
      intraBurstDiagnostic ... % diagnostic
     ] = receiver.receiver( ...
         rxSignal, ... % input signal
@@ -313,7 +316,7 @@ for i = 1:metrics.packets
     metrics.SINR_runs(i) = sinr_linear;
     metrics.EbN0_linear_runs(i) = EbN0_linear;
     metrics.EVM_runs(:,i) = evmPerBurst_percent;
-    metrics.detections = metrics.detections + numDetectedBursts;
+    metrics.detections = metrics.detections + numDetectedBursts; % TODO! ERASEME!
    
     % Metric Plots outputted only for the first iteration over the first
     % packet

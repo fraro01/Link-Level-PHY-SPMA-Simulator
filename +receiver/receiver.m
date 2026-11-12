@@ -13,7 +13,7 @@ function [errMax, ...
           vettore, ...             % diagnostic
           detections, ...          % diagnostic
           rxMatchedByChannel, ...  % diagnostic
-          numDetectedBursts, ...
+          numDetectedBursts, ... % TODO! ERASEME!
           intraBurstDiagnostic ... % diasgnostic
          ] = receiver( rxSignal, ... % input signal
                                     blankingMask, ...
@@ -658,7 +658,7 @@ function [errMax, ...
     % must be very different from the original training.
     % Usuallly in order to find them we could impost a typical optimization
     % problem of Operational Research, with the training sequences and the
-    % estimator.
+    % estimator. --> read the script: "generateOptimizedPreamble.m"
 
     % NOTE! this is a standard symbol-spaced channel estimation and 
     % equalization. Not fractionally-spaced.
@@ -793,7 +793,7 @@ function [errMax, ...
         % Numerical floor, to avoid a too low variance that could explose LLR
         noiseVarAfterEq(k) = max(noiseVarAfterEq(k), 1e-8);
         
-        % TODO! based on the 'noiseVarAfterEq', (we can inspect its values
+        % NOTE! based on the 'noiseVarAfterEq', (we can inspect its values
         % from the diagnostic structure below: 'intraBurstDiagnostic'), we
         % can see that usually if the total number of detections made by 
         % the CA-CFAR contains some false alarms, the number of false
