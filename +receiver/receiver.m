@@ -847,7 +847,10 @@ function [errMax, ...
                                   'firstSymbol', [], ...
                                   'lastSymbol', [], ...
                                   'firstPayloadLLR', [], ... % first LLR position
-                                  'lastPayloadLLR', []);     % last LLR position
+                                  'lastPayloadLLR', [], ... % last LLR position
+                                  'berGroundTruth', [], ... % for DD-SCE BER diagnostic
+                                  'numBitErrors', [], ...   % for DD-SCE BER diagnostic
+                                  'numBitsWindow', []);     % for DD-SCE BER diagnostic
     
     % 8-PSK demodulation cycle
     for k = 1:numDetectedBursts
@@ -981,6 +984,12 @@ function [errMax, ...
     rxEqualizedBurstsReordered = zeros(symbolsPerBurst, numBursts);   % for reordered metrics
     rxSCFDEBurstsReordered = zeros(symbolsPerBurstWithCP, numBursts); % for reordered metrics
     H_est_burstsReordered = zeros(symbolsPerBurst, numBursts);        % for reordered metrics
+    % DD-SCE diagnostic reordered by transmitted burst index, structure
+    % for storing each one of the 28 bursts. Leave it like this, it will be
+    % overwritten (so far we have the first detection repeated #numBursts
+    % times).
+    % the reason is to take advantage of the struct fields already written!
+    intraBurstDiagnosticReordered = repmat(intraBurstDiagnostic(1), numBursts, 1);
 
     % whether at low SNR two detections declare the same ID, we take 
     % advantage of the LLR reliability:
@@ -1104,6 +1113,9 @@ function [errMax, ...
         rxSCFDEBursts(:,detectionIdx); % for reordered metrics        
         H_est_burstsReordered(:,decodedBurstIndex) = ...      
             H_est_burstsDetected(:,detectionIdx); % for reordered metrics
+        % Reorder DD-SCE diagnostic
+        intraBurstDiagnosticReordered(decodedBurstIndex) = ...
+            intraBurstDiagnostic(detectionIdx);
     end
     
     % From this point onward 'burstDetected' is indexed according to the
@@ -1112,6 +1124,98 @@ function [errMax, ...
     rxEqualizedBursts = rxEqualizedBurstsReordered; % for reordered metrics
     rxSCFDEBursts = rxSCFDEBurstsReordered;         % for reordered metrics
     H_est_bursts = H_est_burstsReordered;           % for reordered metrics
+    intraBurstDiagnostic = intraBurstDiagnosticReordered; % for DD-SCE BER
+
+
+
+    %% SCE GROUND-TRUTH BER DIAGNOSTIC  
+    % NOTE!
+    % LIMITATIONS OF THE DD-SCE BER DIAGNOSTIC:
+    % 1. Burst association:
+    %    BER assumes correct matching between received and transmitted
+    %    bursts. Incorrect burst IDs or FRIEND misclassification may
+    %    lead to misleading BER values and TP/FP/FN/TN statistics.
+    %
+    % 2. Hard-decision BER:
+    %    BER is computed from hard-bit decisions on equalized symbols,
+    %    while the receiver uses soft LLRs. Therefore, this metric
+    %    detects windows containing bit errors but does not assess
+    %    whether erasing their LLRs benefits the Turbo decoder.
+    for k = 1:numBursts    
+        % Only consider detected and accepted bursts
+        if ~burstDetected(k)
+            continue;
+        end    
+        % True transmitted bits (including header and padding)
+        txBits = pskdemod(modulatedBursts(:,k), ...
+                          M, pi/M, 'gray', 'OutputType', 'bit');    
+        % HARD DECISIONS before SCE erasure
+        rxBits = pskdemod(rxEqualizedBursts(:,k), ...
+                          M, pi/M, 'gray', 'OutputType', 'bit');    
+        % One BER value per SCE window
+        % how many windows adopted by DD-SCE
+        nWindows = numel(intraBurstDiagnostic(k).erasedWindow);
+        % for storing final data
+        berWindows = nan(nWindows,1);
+        numErrorsWindows = zeros(nWindows,1);
+        numBitsWindows = zeros(nWindows,1);    
+        % Last valid bit, excluding 8-PSK padding
+        lastValidBit = numel(txBits) - numPadBits8PSK;    
+        for m = 1:nWindows
+            firstBit = intraBurstDiagnostic(k).firstPayloadLLR(m);
+            lastBit = intraBurstDiagnostic(k).lastPayloadLLR(m);    
+            % Exclude padding
+            lastBit = min(lastBit, lastValidBit);    
+            if isnan(firstBit) || isnan(lastBit) || firstBit > lastBit
+                continue;
+            end    
+            % Actual bit errors in this window
+            nErrors = sum(txBits(firstBit:lastBit) ~= ...
+                          rxBits(firstBit:lastBit));    
+            nBits = lastBit - firstBit + 1;    
+            numErrorsWindows(m) = nErrors;
+            numBitsWindows(m) = nBits;
+            berWindows(m) = nErrors / nBits;
+        end
+        % Store diagnostic results
+        intraBurstDiagnostic(k).berGroundTruth = berWindows;
+        intraBurstDiagnostic(k).numBitErrors = numErrorsWindows;
+        intraBurstDiagnostic(k).numBitsWindow = numBitsWindows;    
+    end
+
+    % SCE DECISION ACCURACY DIAGNOSTIC    
+    TP = 0;
+    FP = 0;
+    FN = 0;
+    TN = 0;    
+    for k = 1:numBursts    
+        if ~burstDetected(k)
+            continue;
+        end    
+        ber = intraBurstDiagnostic(k).berGroundTruth;
+        erased = intraBurstDiagnostic(k).erasedWindow;    
+        % Ignore windows without a valid BER
+        valid = ~isnan(ber);    
+        degraded = ber > 0;   
+        % how many elements satisfy simultaneously all three conditions
+        TP = TP + sum(valid & degraded & erased);
+        FP = FP + sum(valid & ~degraded & erased);
+        FN = FN + sum(valid & degraded & ~erased);
+        TN = TN + sum(valid & ~degraded & ~erased);    
+    end    
+    % Classification metrics
+    precisionSCE = TP / max(TP + FP, 1);
+    recallSCE = TP / max(TP + FN, 1);    
+    % Diagnostic output
+    fprintf('\n--- SCE GROUND-TRUTH DIAGNOSTIC ---\n');
+    fprintf('TP (degraded and erased): %d\n', TP);
+    fprintf('FP (reliable but erased): %d\n', FP);
+    fprintf('FN (degraded but retained): %d\n', FN);
+    fprintf('TN (reliable and retained): %d\n', TN);
+    fprintf('Precision SCE: %.2f %%\n', 100*precisionSCE);
+    fprintf('Recall SCE: %.2f %%\n', 100*recallSCE);
+
+
 
     % Remove 8-PSK padding
     rxFramedBurstsLLR = rxFramedBurstsPaddedLLR(1:end-numPadBits8PSK, :);
