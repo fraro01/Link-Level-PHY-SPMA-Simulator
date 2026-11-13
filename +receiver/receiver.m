@@ -13,8 +13,8 @@ function [errMax, ...
           vettore, ...             % diagnostic
           detections, ...          % diagnostic
           rxMatchedByChannel, ...  % diagnostic
-          numDetectedBursts, ... % TODO! ERASEME!
-          intraBurstDiagnostic ... % diasgnostic
+          intraBurstDiagnostic, ... % diagnostic
+          reportDiagnosticDDSCE ...
          ] = receiver( rxSignal, ... % input signal
                                     blankingMask, ...
                                     numBursts, ...
@@ -1182,7 +1182,6 @@ function [errMax, ...
         intraBurstDiagnostic(k).numBitErrors = numErrorsWindows;
         intraBurstDiagnostic(k).numBitsWindow = numBitsWindows;    
     end
-
     % SCE DECISION ACCURACY DIAGNOSTIC    
     TP = 0;
     FP = 0;
@@ -1195,9 +1194,11 @@ function [errMax, ...
         ber = intraBurstDiagnostic(k).berGroundTruth;
         erased = intraBurstDiagnostic(k).erasedWindow;    
         % Ignore windows without a valid BER
-        valid = ~isnan(ber);    
-        degraded = ber > 0;   
-        % how many elements satisfy simultaneously all three conditions
+        valid = ~isnan(ber);            
+        degraded = ber > 0.5; % ber > 0.5 means that the majority of the bits 
+        % in the given window are errored
+        % sum(& & &) --> how many elements satisfy simultaneously all three 
+        % conditions
         TP = TP + sum(valid & degraded & erased);
         FP = FP + sum(valid & ~degraded & erased);
         FN = FN + sum(valid & degraded & ~erased);
@@ -1205,17 +1206,16 @@ function [errMax, ...
     end    
     % Classification metrics
     precisionSCE = TP / max(TP + FP, 1);
-    recallSCE = TP / max(TP + FN, 1);    
-    % Diagnostic output
-    fprintf('\n--- SCE GROUND-TRUTH DIAGNOSTIC ---\n');
-    fprintf('TP (degraded and erased): %d\n', TP);
-    fprintf('FP (reliable but erased): %d\n', FP);
-    fprintf('FN (degraded but retained): %d\n', FN);
-    fprintf('TN (reliable and retained): %d\n', TN);
-    fprintf('Precision SCE: %.2f %%\n', 100*precisionSCE);
-    fprintf('Recall SCE: %.2f %%\n', 100*recallSCE);
+    recallSCE = TP / max(TP + FN, 1);  
+    % diagnostic Structure for storing results
+    reportDiagnosticDDSCE.TP = TP;
+    reportDiagnosticDDSCE.FP = FP;
+    reportDiagnosticDDSCE.FN = FN;
+    reportDiagnosticDDSCE.TN = TN;
+    reportDiagnosticDDSCE.precisionSCE = 100*precisionSCE;
+    reportDiagnosticDDSCE.recallSCE = 100*recallSCE;
 
-
+ 
 
     % Remove 8-PSK padding
     rxFramedBurstsLLR = rxFramedBurstsPaddedLLR(1:end-numPadBits8PSK, :);
