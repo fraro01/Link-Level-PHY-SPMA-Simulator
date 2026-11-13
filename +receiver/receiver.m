@@ -14,7 +14,8 @@ function [errMax, ...
           detections, ...          % diagnostic
           rxMatchedByChannel, ...  % diagnostic
           intraBurstDiagnostic, ... % diagnostic
-          reportDiagnosticDDSCE ...
+          reportDiagnosticDDSCE, ...
+          thresholdDDSCEBER ... % for DD-SCE report
          ] = receiver( rxSignal, ... % input signal
                                     blankingMask, ...
                                     numBursts, ...
@@ -1194,9 +1195,13 @@ function [errMax, ...
         ber = intraBurstDiagnostic(k).berGroundTruth;
         erased = intraBurstDiagnostic(k).erasedWindow;    
         % Ignore windows without a valid BER
-        valid = ~isnan(ber);            
-        degraded = ber > 0.5; % ber > 0.5 means that the majority of the bits 
-        % in the given window are errored
+        valid = ~isnan(ber); 
+        thresholdDDSCEBER = 0.174;
+        degraded = ber > thresholdDDSCEBER; % ber > 0.5 means that the majority of the bits 
+        % in the given window are errored. 
+        % For a Turbo Coder with rate 1/3, the theoretical limit should be
+        % around 17.4% of raw BER for still being able to completely
+        % reconstruct the original packet.
         % sum(& & &) --> how many elements satisfy simultaneously all three 
         % conditions
         TP = TP + sum(valid & degraded & erased);
