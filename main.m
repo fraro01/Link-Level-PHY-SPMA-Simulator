@@ -52,7 +52,7 @@ indexingData = load('optimizedIndexing.mat', ...
                      'friendIndexCodeword');
 burstIndexCodebook = indexingData.burstIndexCodebook;
 friendIndexCodeword = indexingData.friendIndexCodeword;
-rng('shuffle'); % set 'shuffle' to keep it random at each iteration, otherwise  
+rng(42); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
@@ -87,7 +87,7 @@ channelEstMargin = 2; % especially important for fractional delays, when
 
 %% SIMULATION PARAMETERS
 % amount of packet transmissions we want to simulate
-metrics.packets = 100; % simulation cycles
+metrics.packets = 1; % simulation cycles
 show_metrics_plots = true; % whether to show the metric plots or not
 
 % counters for storing values we use a MATLAB 'Structure'
@@ -463,7 +463,7 @@ fprintf('False Detection Probability (FDP)              = %.2f\n', ...
 fprintf(['------------------------------------------------------------' ...
     '-------\n']);
 fprintf(['Decision-Directed Selective Channel Erasure Diagnostic Report\n' ...
-    'a window is intended degraded when its BER is greater than %.2f %%\n'], ...
+   'a window is intended degraded when its BER is greater than %.2f %%\n'], ...
     thresholdDDSCEBER*100);
 fprintf('True Positive windows (degraded and erased)    = %d\n', ...
     metrics.TP);
