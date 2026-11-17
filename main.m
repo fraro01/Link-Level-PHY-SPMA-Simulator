@@ -33,7 +33,7 @@ end
 tunerDelay_s = 1e-6;
 % Set the length of the packet in bits
 packetLength = 1331; % bits
-dutyCycle = 0.25; % percentage TX/RX (0,1]
+dutyCycle = 1.00; % percentage TX/RX (0,1]
 numBursts = 28;
 % FIXED OPTIMIZED PREAMBLE, orthogonality for its delayed copies
 % the sync and the reference bits remain fixed for all bursts
@@ -73,10 +73,10 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 
 %% CHANNEL PARAMETERS
 % INTERFERERS
-numInterferers = 3; % set the number of interferer nodes, NOTE! it 
+numInterferers = 0; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
-blankingPercentage = 0.23; % percentage with respect to the time 'txSignal' 
+blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
 % representing the time occupied by the RX node while is transmitting
 
 %% RECEIVER PARAMETERS
