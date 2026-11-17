@@ -895,6 +895,13 @@ function [errMax, ...
         firstPayloadSymbol = floor(HeaderLength / bitsPerSymbol) + 1;
         numPayloadSymbolsDD = max(0, numSymbols - firstPayloadSymbol + 1);
         numLocalWindows = ceil(numPayloadSymbolsDD / localWindowSymbols);
+        % Balanced partition of payload symbols across DD-SCE windows
+        baseWindowSymbols = floor(numPayloadSymbolsDD / numLocalWindows);
+        extraSymbols = mod(numPayloadSymbolsDD, numLocalWindows);        
+        % The first extraSymbols windows contain one additional symbol
+        windowSizes = baseWindowSymbols * ones(numLocalWindows, 1);
+        windowSizes(1:extraSymbols) = windowSizes(1:extraSymbols) + 1;
+
         sigmaDD_windows = nan(numLocalWindows,1);
         reliabilityRatio_windows = nan(numLocalWindows,1);
         erasedWindow = false(numLocalWindows,1);        
@@ -902,7 +909,7 @@ function [errMax, ...
         lastSymbol_windows = nan(numLocalWindows,1);        
         firstPayloadLLR_windows = nan(numLocalWindows,1);
         lastPayloadLLR_windows = nan(numLocalWindows,1);        
-        windowIdx = 0;
+        firstSymbol = firstPayloadSymbol;
         % DECISION-DIRECTED INTRABURST ERASURE
         % refers to a signal processing and communication technique where a 
         % receiver uses its own internal hard or soft decisions (its "best 
@@ -910,10 +917,9 @@ function [errMax, ...
         % known training sequences or pilot symbols to adapt filters, track 
         % channel states, or correct errors.
         % for cycle over the INTRA-BURST WINDOWS
-        for firstSymbol = firstPayloadSymbol:localWindowSymbols:numSymbols
-            windowIdx = windowIdx + 1;
-            lastSymbol = min(firstSymbol + localWindowSymbols - 1, numSymbols);
-            symbolIndices = firstSymbol:lastSymbol;    
+        for windowIdx = 1:numLocalWindows
+            lastSymbol = firstSymbol + windowSizes(windowIdx) - 1;
+            symbolIndices = firstSymbol:lastSymbol;  
             % Local DD residual power
             sigmaDD_m = mean(abs(ddResidual(symbolIndices)).^2);    
             % Normalize against the GLOBAL post-EQ pilot estimate
@@ -944,6 +950,9 @@ function [errMax, ...
                 firstPayloadLLR_windows(windowIdx) = firstLLR_toErase;
                 lastPayloadLLR_windows(windowIdx) = lastLLR_toErase;
             end
+
+             % Starting symbol of the next balanced window
+            firstSymbol = lastSymbol + 1;
         end
         
         % Diagnostic storage
