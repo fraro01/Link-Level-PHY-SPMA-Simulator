@@ -105,10 +105,10 @@ function [errMax, ...
     % if 'guardLength = 0 --> exclude ONLY the CUT (Candidate Under Test)'
     guardLength = numSyncSymbols * ( 32 / 100 ); % validated with Monte Carlo
     % Number of standard deviations above the local correlation background.
-    thresholdK = 10; % validated with Monte Carlo
-    % Minimum usable fraction of synchronization symbols after blanking.
+    thresholdK = 14; % validated with Monte Carlo
+    % Minimum usable fraction of synchronization 0symbols after blanking.
     % Blanking Compensation variable threshold
-    minUsableSyncFraction = 0.4;
+    minUsableSyncFraction = 0.1;
     % this parameter sets the minimum fraction of sync symbols not-blanked by  
     % which we can still try to recover the burst
     % (usable_sync_symbols/total_sync_symbols).
@@ -1102,7 +1102,7 @@ function [errMax, ...
         % The hyperparameter/threshold below is validated through Monte 
         % Carlo campaigns, find the results and the method used in the 
         % Excel file: 'Montecarlo campaigns for thresholds validation'
-        if indexReliability < 5
+        if indexReliability < 4
             continue;
         end
 
