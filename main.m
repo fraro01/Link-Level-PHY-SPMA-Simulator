@@ -33,7 +33,7 @@ end
 tunerDelay_s = 1e-6;
 % Set the length of the packet in bits
 packetLength = 1331; % bits
-dutyCycle = 0.25; % percentage TX/RX (0,1]
+dutyCycle = 0.33; % percentage TX/RX (0,1]
 numBursts = 28;
 % FIXED OPTIMIZED PREAMBLE, orthogonality for its delayed copies
 % the sync and the reference bits remain fixed for all bursts
@@ -52,7 +52,7 @@ indexingData = load('optimizedIndexing.mat', ...
                      'friendIndexCodeword');
 burstIndexCodebook = indexingData.burstIndexCodebook;
 friendIndexCodeword = indexingData.friendIndexCodeword;
-rng(42); % set 'shuffle' to keep it random at each iteration, otherwise  
+rng(44); % set 'shuffle' to keep it random at each iteration, otherwise  
 % e.g.: 4 allows to view some good MetricPlots
 % Frequencies & RRC Parameters
 fMin = 1435e6;
@@ -73,10 +73,10 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 
 %% CHANNEL PARAMETERS
 % INTERFERERS
-numInterferers = 0; % set the number of interferer nodes, NOTE! it 
+numInterferers = 4; % set the number of interferer nodes, NOTE! it 
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
-blankingPercentage = 0.25; % percentage with respect to the time 'txSignal' 
+blankingPercentage = 0.07; % percentage with respect to the time 'txSignal' 
 % representing the time occupied by the RX node while is transmitting
 
 %% RECEIVER PARAMETERS
