@@ -106,7 +106,7 @@ function [errMax, ...
     guardLength = numSyncSymbols * ( 32 / 100 ); % validated with Monte Carlo
     % Number of standard deviations above the local correlation background.
     thresholdK = 14; % validated with Monte Carlo
-    % Minimum usable fraction of synchronization 0symbols after blanking.
+    % Minimum usable fraction of synchronization symbols after blanking.
     % Blanking Compensation variable threshold
     minUsableSyncFraction = 0.3;
     % this parameter sets the minimum fraction of sync symbols not-blanked by  
@@ -837,11 +837,11 @@ function [errMax, ...
     gammaErasure = 70;   % validated with Monte Carlo
     HeaderLength = length(syncReference) + ...
                           length(phaseReference) + ...
-                          numProtectedIndexBits;   
+                          numProtectedIndexBits;
     % First LLR belonging to coded payload
     firstPayloadLLR = HeaderLength + 1;
     % Decision Directed Intra-burst erasure DIAGNOSTIC storage
-    intraBurstDiagnostic = struct('noiseVarAfterEq', [], ... 
+    intraBurstDiagnostic = struct('noiseVarAfterEq', [], ...
                                   'sigmaDD', [], ...
                                   'reliabilityRatio', [], ...
                                   'erasedWindow', [], ...
@@ -935,10 +935,21 @@ function [errMax, ...
             firstLLR_toErase = max(firstLLR_window, firstPayloadLLR);
             lastLLR_toErase  = lastLLR_window;            
             isErased = false; % for diagnostic
-            if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
-                burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
-                isErased = true; % for diagnostic
-            end            
+            % if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
+            %    burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
+            %    isErased = true; % for diagnostic
+            % end   
+            %{%}
+            idx = firstLLR_toErase:lastLLR_toErase;
+            if ~isempty(idx)
+                if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase
+                    burstLLR(idx) = 0;                                   % hopeless window: erase
+                    isErased = true;
+                elseif reliabilityRatio > 1 && firstLLR_toErase <= lastLLR_toErase
+                    burstLLR(idx) = burstLLR(idx) / reliabilityRatio;    % noisier window: lower confidence
+                end
+            end
+            
             % for diagnostic
             sigmaDD_windows(windowIdx) = sigmaDD_m;
             reliabilityRatio_windows(windowIdx) = reliabilityRatio;
@@ -1243,9 +1254,11 @@ function [errMax, ...
     %remove headers
     rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
     % stack into column
-    rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1); 
+    % rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1);
+    rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR.', [], 1); % de-interleaving
+
     % leave padding
-    rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits); 
+    rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits);
                
     % numIterations = 6; % the default is 6
     turboDec = comm.TurboDecoder( ... % 'TrellisStructure', trellis, ...

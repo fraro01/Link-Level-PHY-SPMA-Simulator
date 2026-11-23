@@ -75,7 +75,8 @@ function [packet, ... % original packet with random bits
     % the Rx MUST "unpad" the received packet
     encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
     % (bitsPerBurst x numBursts) matrix keeping the order of bits
-    bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
+    % bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
+    bursts = reshape(encodedPacketPadded, numBursts, bitsPerBurst).'; % inter-burst interleaving
     
     % essential to extract the proper length
     numProtectedIndexBits = size(burstIndexCodebook, 2);
