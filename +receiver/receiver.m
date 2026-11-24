@@ -935,10 +935,12 @@ function [errMax, ...
             firstLLR_toErase = max(firstLLR_window, firstPayloadLLR);
             lastLLR_toErase  = lastLLR_window;            
             isErased = false; % for diagnostic
-            % if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
-            %    burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
-            %    isErased = true; % for diagnostic
-            % end   
+            %{
+            if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
+                burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
+                isErased = true; % for diagnostic
+            end  
+            %}
             %{%}
             idx = firstLLR_toErase:lastLLR_toErase;
             if ~isempty(idx)
@@ -949,6 +951,7 @@ function [errMax, ...
                     burstLLR(idx) = burstLLR(idx) / reliabilityRatio;    % noisier window: lower confidence
                 end
             end
+            
             
             % for diagnostic
             sigmaDD_windows(windowIdx) = sigmaDD_m;

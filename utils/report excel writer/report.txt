@@ -1,0 +1,42 @@
+===================================================================
+||                              REPORT                           ||
+===================================================================
+-------------------------------------------------------------------
+Simulation run over a total of packets         = 100
+Number of interferers nodes                    = 7
+Amount of blanking in RX                       = 20 %
+Duty Cycle, TX/RX percentage for TX node       = 33 %
+-------------------------------------------------------------------
+Signal-to-Interference-plus-Noise Ratio        = 9.93 dB
+Error Vector Magnitude percentage              = 44.25 %
+Error Vector Magnitude decibels                = -7.08 dB
+E_b/N_0 linear                                 = 1429.33
+E_b/N_0 decibels                               = 31.55 dB
+-------------------------------------------------------------------
+Hard errors inferred from LLR sign             = 80858 out of 400500
+Total final errored bits from original packets = 3191 out of 133100
+Bit Error Rate before decoding                 = 20.19 %
+Bit Error Rate after decoding                  = 2.40 %
+-------------------------------------------------------------------
+Total bursts erased                            = 770 out of 2800
+Total packets completely reconstructed         = 90 out of 100
+Burst Loss Rate                                = 27.50 %
+Packet Error Rate                              = 10.00 %
+-------------------------------------------------------------------
+Total number of detections made by FIXED DETECTION THRESHOLD = 14897
+Total TRUE detections                          = 13481
+True Transmitter detections                    = 2199 out of 2800
+True Friends (Interferers) detections          = 11282
+Total FALSE detections                         = 1416
+False Detection Probability (FDP)              = 0.09
+-------------------------------------------------------------------
+Decision-Directed Selective Channel Erasure Diagnostic Report
+a window is intended degraded when its BER is greater than 17.40 %
+True Positive windows (degraded and erased)    = 252
+False Positive windows (reliable but erased)   = 19
+False Negative windows (degraded but retained) = 1193
+True Negative windows (reliable and retained)  = 6656
+Precision (TP/(TP+FP))                         = 58.71 %
+Recall (TP/(TP+FN))                            = 17.94 %
+===================================================================
+>> 
