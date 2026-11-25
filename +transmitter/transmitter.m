@@ -77,6 +77,36 @@ function [packet, ... % original packet with random bits
     % (bitsPerBurst x numBursts) matrix keeping the order of bits
     % bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
     bursts = reshape(encodedPacketPadded, numBursts, bitsPerBurst).'; % inter-burst interleaving
+
+    %TODO! ERASEME, and uncomment the row just above
+    % INTER-BURST INTERLEAVING INDICES
+    % The interleaver is a fixed pseudo-random permutation that must be IDENTICAL
+    % at the TX and at the RX, without exchanging any variable between them.
+    % This is achieved by generating it from a hard-coded seed:
+    %   1. rng(7,'twister') sets the Mersenne Twister generator to seed 7 and
+    %      returns in 'prevState' the state the generator had before the call,
+    %      i.e. the exact point reached by the simulation stream (seeded in
+    %      main.m). It acts as a bookmark.
+    %   2. randperm(N) is then deterministic: every call made right after
+    %      rng(7,'twister') returns the very same permutation of 1:N, so TX and
+    %      RX obtain the same indices.
+    %   3. rng(prevState) restores the simulation stream, so that the rest of the
+    %      simulation (new packet bits, burst timings, channel, noise,
+    %      interferers) proceeds exactly as if these lines had never been
+    %      executed. Without this step the random stream would stay stuck on
+    %      seed 7 and every packet would see the same "random" values.
+    % NOTE! The seed (7), the generator type ('twister') and N must be the same
+    % at TX and RX, otherwise the de-interleaving returns scrambled LLRs.
+    %{
+    % inter-burst interleaving: random permutation with a fixed seed, known
+    % to both TX and RX
+    prevState = rng(7, 'twister');               % save simulation state, set interleaver seed
+    interburstIdx = randperm(numBursts*bitsPerBurst);
+    rng(prevState);                              % restore simulation state
+    xInt = encodedPacketPadded(interburstIdx);   % encodedPacketPadded is already a column
+    bursts = reshape(xInt, bitsPerBurst, numBursts);   % one column = one burst
+    %}
+
     
     % essential to extract the proper length
     numProtectedIndexBits = size(burstIndexCodebook, 2);

@@ -45,7 +45,8 @@ function [errMax, ...
                                     burstIndexCodebook, ... % Burst-index codebook configuration, RX knows the codebook, but NOT which burst will arrive when.
                                     delay_max, ...
                                     channelEstMargin, ...
-                                    friendIndexCodeword ...
+                                    friendIndexCodeword, ...
+                                    bitsPerBurst ...
                                     )
 
     %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
@@ -1210,7 +1211,9 @@ function [errMax, ...
     TP = 0;
     FP = 0;
     FN = 0;
-    TN = 0;    
+    TN = 0;   
+
+    thresholdDDSCEBER = 0.174;
     for k = 1:numBursts    
         if ~burstDetected(k)
             continue;
@@ -1219,7 +1222,6 @@ function [errMax, ...
         erased = intraBurstDiagnostic(k).erasedWindow;    
         % Ignore windows without a valid BER
         valid = ~isnan(ber); 
-        thresholdDDSCEBER = 0.174;
         degraded = ber > thresholdDDSCEBER; % ber > 0.5 means that the majority of the bits 
         % in the given window are errored. 
         % For a Turbo Coder with rate 1/3, the theoretical limit should be
@@ -1258,8 +1260,38 @@ function [errMax, ...
     rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
     % stack into column
     % rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1);
-    rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR.', [], 1); % de-interleaving
+    rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR.', [], 1); % inter-burst de-interleaving
 
+    %TODO! ERASEME, and uncomment the row just above
+    % INTER-BURST INTERLEAVING INDICES
+    % The interleaver is a fixed pseudo-random permutation that must be IDENTICAL
+    % at the TX and at the RX, without exchanging any variable between them.
+    % This is achieved by generating it from a hard-coded seed:
+    %   1. rng(7,'twister') sets the Mersenne Twister generator to seed 7 and
+    %      returns in 'prevState' the state the generator had before the call,
+    %      i.e. the exact point reached by the simulation stream (seeded in
+    %      main.m). It acts as a bookmark.
+    %   2. randperm(N) is then deterministic: every call made right after
+    %      rng(7,'twister') returns the very same permutation of 1:N, so TX and
+    %      RX obtain the same indices.
+    %   3. rng(prevState) restores the simulation stream, so that the rest of the
+    %      simulation (new packet bits, burst timings, channel, noise,
+    %      interferers) proceeds exactly as if these lines had never been
+    %      executed. Without this step the random stream would stay stuck on
+    %      seed 7 and every packet would see the same "random" values.
+    % NOTE! The seed (7), the generator type ('twister') and N must be the same
+    % at TX and RX, otherwise the de-interleaving returns scrambled LLRs.
+    %{
+    % inter-burst de-interleaving (same seed as the TX)
+    prevState = rng(7, 'twister');
+    interburstIdx = randperm(numBursts*bitsPerBurst);
+    rng(prevState);
+    llrInt = rxBurstsPayloadLLR(:);              % bursts stacked column after column
+    rxEncodedPacketPaddedLLR = zeros(numBursts*bitsPerBurst, 1);
+    rxEncodedPacketPaddedLLR(interburstIdx) = llrInt;
+    %}
+
+    
     % leave padding
     rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits);
                
