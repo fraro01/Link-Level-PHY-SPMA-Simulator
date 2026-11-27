@@ -835,7 +835,7 @@ function [errMax, ...
     % Carlo campaigns, find the results and the method used in the Excel 
     % file: 'Montecarlo campaigns for thresholds validation'
     localWindowSymbols = 12; % validated with Monte Carlo
-    gammaErasure = 70;   % validated with Monte Carlo
+    gammaErasure = 70; % validated with Monte Carlo
     HeaderLength = length(syncReference) + ...
                           length(phaseReference) + ...
                           numProtectedIndexBits;
@@ -936,13 +936,15 @@ function [errMax, ...
             firstLLR_toErase = max(firstLLR_window, firstPayloadLLR);
             lastLLR_toErase  = lastLLR_window;            
             isErased = false; % for diagnostic
-            %{
+            %{ 
+            % previous implementation of DD-SCE
             if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
                 burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
                 isErased = true; % for diagnostic
             end  
             %}
             %{%}
+            % upgraded DD-SCE implementation
             idx = firstLLR_toErase:lastLLR_toErase;
             if ~isempty(idx)
                 if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase
@@ -1212,7 +1214,10 @@ function [errMax, ...
     FP = 0;
     FN = 0;
     TN = 0;   
-
+    
+    % For a Turbo Coder with rate 1/3, the theoretical limit should be
+    % around 17.4% of raw BER for still being able to completely
+    % reconstruct the original packet.
     thresholdDDSCEBER = 0.174;
     for k = 1:numBursts    
         if ~burstDetected(k)
@@ -1223,10 +1228,7 @@ function [errMax, ...
         % Ignore windows without a valid BER
         valid = ~isnan(ber); 
         degraded = ber > thresholdDDSCEBER; % ber > 0.5 means that the majority of the bits 
-        % in the given window are errored. 
-        % For a Turbo Coder with rate 1/3, the theoretical limit should be
-        % around 17.4% of raw BER for still being able to completely
-        % reconstruct the original packet.
+        % in the given window are errored.         
         % sum(& & &) --> how many elements satisfy simultaneously all three 
         % conditions
         TP = TP + sum(valid & degraded & erased);
@@ -1259,11 +1261,12 @@ function [errMax, ...
     %remove headers
     rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
     % stack into column
+    % without inter-burst interleaving:
     % rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1);
+    
+    % NOTE! ROUND ROBIN INTER-BURST INTERLEAVING
     rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR.', [], 1); % inter-burst de-interleaving
-
-    %TODO! ERASEME, and uncomment the row just above
-    % INTER-BURST INTERLEAVING INDICES
+    % NOTE! PSEUDORANDOM INTER-BURST INTERLEAVING
     % The interleaver is a fixed pseudo-random permutation that must be IDENTICAL
     % at the TX and at the RX, without exchanging any variable between them.
     % This is achieved by generating it from a hard-coded seed:
@@ -1286,12 +1289,13 @@ function [errMax, ...
     prevState = rng(7, 'twister');
     interburstIdx = randperm(numBursts*bitsPerBurst);
     rng(prevState);
-    llrInt = rxBurstsPayloadLLR(:);              % bursts stacked column after column
-    rxEncodedPacketPaddedLLR = zeros(numBursts*bitsPerBurst, 1);
+    llrInt = rxBurstsPayloadLLR(:); % bursts stacked column after column, in a single columvector
+    rxEncodedPacketPaddedLLR = zeros(numBursts*bitsPerBurst, 1); % single column vector for storing the final version of the coded packet in the proper order
     rxEncodedPacketPaddedLLR(interburstIdx) = llrInt;
     %}
 
-    
+
+
     % leave padding
     rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits);
                

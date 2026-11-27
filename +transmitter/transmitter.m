@@ -75,11 +75,12 @@ function [packet, ... % original packet with random bits
     % the Rx MUST "unpad" the received packet
     encodedPacketPadded = [encodedPacket; zeros(numPaddingBits,1)];
     % (bitsPerBurst x numBursts) matrix keeping the order of bits
+    % without inter-burst interleaving:
     % bursts = reshape(encodedPacketPadded, bitsPerBurst, numBursts);
+    
+    % NOTE! ROUND ROBIN INTER-BURST INTERLEAVING
     bursts = reshape(encodedPacketPadded, numBursts, bitsPerBurst).'; % inter-burst interleaving
-
-    %TODO! ERASEME, and uncomment the row just above
-    % INTER-BURST INTERLEAVING INDICES
+    % NOTE! PSEUDORANDOM INTER-BURST INTERLEAVING 
     % The interleaver is a fixed pseudo-random permutation that must be IDENTICAL
     % at the TX and at the RX, without exchanging any variable between them.
     % This is achieved by generating it from a hard-coded seed:
@@ -97,9 +98,9 @@ function [packet, ... % original packet with random bits
     %      seed 7 and every packet would see the same "random" values.
     % NOTE! The seed (7), the generator type ('twister') and N must be the same
     % at TX and RX, otherwise the de-interleaving returns scrambled LLRs.
-    %{
     % inter-burst interleaving: random permutation with a fixed seed, known
     % to both TX and RX
+    %{
     prevState = rng(7, 'twister');               % save simulation state, set interleaver seed
     interburstIdx = randperm(numBursts*bitsPerBurst);
     rng(prevState);                              % restore simulation state
@@ -107,7 +108,8 @@ function [packet, ... % original packet with random bits
     bursts = reshape(xInt, bitsPerBurst, numBursts);   % one column = one burst
     %}
 
-    
+
+
     % essential to extract the proper length
     numProtectedIndexBits = size(burstIndexCodebook, 2);
     

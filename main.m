@@ -33,7 +33,7 @@ end
 tunerDelay_s = 1e-6;
 % Set the length of the packet in bits
 packetLength = 1331; % bits
-dutyCycle = 1.0; % percentage TX/RX (0,1] 68 --> 0 PER; 69 --> 100% PER (interferers = 15)
+dutyCycle = 0.50; % percentage TX/RX (0,1]
 numBursts = 28;
 % FIXED OPTIMIZED PREAMBLE, orthogonality for its delayed copies
 % the sync and the reference bits remain fixed for all bursts
@@ -73,10 +73,10 @@ cpLength = 3; % Must exceed the maximum channel delay in symbols, adding
 
 %% CHANNEL PARAMETERS
 % INTERFERERS
-numInterferers = 0; % set the number of interferer nodes, NOTE! if interferers = 16 --> PER=67%
+numInterferers = 2; % set the number of interferer nodes
 % resembles an ALOHA network!
 % BLANKING COMPENSATION
-blankingPercentage = 0.0; % percentage with respect to the time 'txSignal' 
+blankingPercentage = 0.25; % percentage with respect to the time 'txSignal' 
 % representing the time occupied by the RX node while is transmitting
 
 %% RECEIVER PARAMETERS
@@ -116,8 +116,6 @@ metrics.TP = 0;
 metrics.FP = 0;
 metrics.FN = 0;
 metrics.TN = 0;
-metrics.precisionSCE = 0;
-metrics.recallSCE = 0;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -348,12 +346,7 @@ for i = 1:metrics.packets
     metrics.FP = metrics.FP + reportDiagnosticDDSCE.FP;
     metrics.FN = metrics.FN + reportDiagnosticDDSCE.FN;
     metrics.TN = metrics.TN + reportDiagnosticDDSCE.TN;
-    % the following last two metrics will be divided by #metrics.packets in 
-    % order to average them
-    metrics.precisionSCE = metrics.precisionSCE + ...
-        reportDiagnosticDDSCE.precisionSCE;
-    metrics.recallSCE = metrics.recallSCE + ...
-        reportDiagnosticDDSCE.recallSCE;
+
     % Metric Plots outputted only for the first iteration over the first
     % packet
     if show_metrics_plots == true && i == 1
@@ -475,9 +468,9 @@ fprintf('False Negative windows (degraded but retained) = %d\n', ...
 fprintf('True Negative windows (reliable and retained)  = %d\n', ...
     metrics.TN);
 fprintf('Precision (TP/(TP+FP))                         = %.2f %%\n', ...
-    metrics.precisionSCE/metrics.packets);
+    (metrics.TP/(metrics.TP + metrics.FP))*100);
 fprintf('Recall (TP/(TP+FN))                            = %.2f %%\n', ...
-    metrics.recallSCE/metrics.packets);
+    (metrics.TP/(metrics.TP + metrics.FN))*100);
 % report end
 fprintf(['============================================================' ...
     '=======\n']);
