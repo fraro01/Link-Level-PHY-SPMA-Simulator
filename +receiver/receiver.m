@@ -45,8 +45,7 @@ function [errMax, ...
                                     burstIndexCodebook, ... % Burst-index codebook configuration, RX knows the codebook, but NOT which burst will arrive when.
                                     delay_max, ...
                                     channelEstMargin, ...
-                                    friendIndexCodeword, ...
-                                    bitsPerBurst ...
+                                    friendIndexCodeword ...
                                     )
 
     %% Conversion in reception of EQUIVALENT-BASEBAND signal with RRC filter 
@@ -100,16 +99,29 @@ function [errMax, ...
     % in the Excel file: 'Montecarlo campaigns for thresholds validation'
     % Number of correlation samples used to estimate the local correlation 
     % background.
-    backgroundWindowLength = 500; % validated with Monte Carlo
+    % backgroundWindowLength = 500; % validated with Monte Carlo
     % Number of correlation samples excluded around the candidate under test.
     % This avoids contaminating the background estimate with the useful peak.
     % if 'guardLength = 0 --> exclude ONLY the CUT (Candidate Under Test)'
-    guardLength = numSyncSymbols * ( 32 / 100 ); % validated with Monte Carlo
+    % guardLength = numSyncSymbols * ( 32 / 100 ); % validated with Monte Carlo
     % Number of standard deviations above the local correlation background.
-    thresholdK = 14; % validated with Monte Carlo
+    % thresholdK = 10; % validated with Monte Carlo
     % Minimum usable fraction of synchronization symbols after blanking.
     % Blanking Compensation variable threshold
-    minUsableSyncFraction = 0.3;
+    % minUsableSyncFraction = 0.4;
+    % this parameter sets the minimum fraction of sync symbols not-blanked by  
+    % which we can still try to recover the burst
+    % (usable_sync_symbols/total_sync_symbols).
+
+    %% FIXED DETECTION THRESHOLD
+    % Fixed threshold on the normalized preamble
+    % correlation metric.
+    % To be calibrated through Monte Carlo simulations.    
+    syncDetectionThreshold = 0.3;
+
+    % Minimum usable fraction of synchronization symbols after blanking.
+    % Blanking Compensation variable threshold
+    minUsableSyncFraction = 0.4;
     % this parameter sets the minimum fraction of sync symbols not-blanked by  
     % which we can still try to recover the burst
     % (usable_sync_symbols/total_sync_symbols).
@@ -312,17 +324,18 @@ function [errMax, ...
                 % much of the synchronization sequence has been blanked.
                 syncThresholdCandidate(candidateIdx) = Inf; % with 'inf' the 
                 % candidate is not valid
-            %{    
+            %{%}    
             else % calculate the variable threshold of Blanking Compens
                 % Blanking-compensated threshold.
                 syncThresholdCandidate(candidateIdx) = ...
                     syncDetectionThreshold * usableFraction;   
-            %}
+            
             end
         end      
 
         % ADAPTIVE CORRELATION THRESHOLD
         % CA-CFAR Cell-Averaging Constant False Alarm Rate
+        %{
         halfWindow = floor(backgroundWindowLength / 2);
         halfGuard  = floor(guardLength / 2);        
         for candidateIdx = 1:numCandidates        
@@ -360,25 +373,21 @@ function [errMax, ...
             % Adaptive detection threshold blanknig compensated
             syncThresholdCandidate(candidateIdx) = backgroundThreshold * usableFraction;     
         end
+        %}
         
     %% 3. NORMALIZED DETECTION SCORE
-        % Since every candidate has its own blanking-compensated threshold,
-        % compare candidates through the normalized detection score:
-        %       detectionScore(q) = syncMetric(q) / threshold(q)
-        % Hence:
-        %       score > 1  --> candidate passes its threshold
-        %       score = 1  --> candidate exactly at threshold
-        %       score < 1  --> candidate fails detection    
-        detectionScore = zeros(numCandidates,1);  
-        % extract only the valid candidates (not infinite)
-        validCandidates = isfinite(syncThresholdCandidate);    
+        detectionScore = zeros(numCandidates,1);        
+        % Valid candidates
+        validCandidates = isfinite(syncThresholdCandidate) & ...
+                          syncThresholdCandidate > 0;        
+        % Normalize correlation metric with respect to
+        % the blanking-compensated fixed threshold
         detectionScore(validCandidates) = ...
-            syncMetric(validCandidates) ./ ... % element-wise, since it is directly with the arrays
-            syncThresholdCandidate(validCandidates);
-
-        % for the 'metricsPlots'
-        syncMetricByChannel{ch} = syncMetric; % detectionScore;
-        syncThresholdByChannel{ch} = syncThresholdCandidate; % Blanking-compensated CA-CFAR
+            syncMetric(validCandidates) ./ ...
+            syncThresholdCandidate(validCandidates);        
+        % Diagnostic storage
+        syncMetricByChannel{ch} = syncMetric;
+        syncThresholdByChannel{ch} = syncThresholdCandidate;
 
         
     %% 4. FIND ALL PREAMBLE PEAKS ON THIS FREQUENCY CHANNEL
@@ -834,15 +843,15 @@ function [errMax, ...
     % The two hyperparameters/thresholds below are validated through Monte 
     % Carlo campaigns, find the results and the method used in the Excel 
     % file: 'Montecarlo campaigns for thresholds validation'
-    localWindowSymbols = 12; % validated with Monte Carlo
-    gammaErasure = 70;   % validated with Monte Carlo
+    localWindowSymbols = 14; % validated with Monte Carlo
+    gammaErasure = 75;   % validated with Monte Carlo
     HeaderLength = length(syncReference) + ...
                           length(phaseReference) + ...
-                          numProtectedIndexBits;
+                          numProtectedIndexBits;   
     % First LLR belonging to coded payload
     firstPayloadLLR = HeaderLength + 1;
     % Decision Directed Intra-burst erasure DIAGNOSTIC storage
-    intraBurstDiagnostic = struct('noiseVarAfterEq', [], ...
+    intraBurstDiagnostic = struct('noiseVarAfterEq', [], ... 
                                   'sigmaDD', [], ...
                                   'reliabilityRatio', [], ...
                                   'erasedWindow', [], ...
@@ -940,20 +949,19 @@ function [errMax, ...
             if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase            
                 burstLLR(firstLLR_toErase:lastLLR_toErase) = 0;
                 isErased = true; % for diagnostic
-            end  
+            end   
             %}
             %{%}
             idx = firstLLR_toErase:lastLLR_toErase;
             if ~isempty(idx)
-                if reliabilityRatio > gammaErasure && firstLLR_toErase <= lastLLR_toErase
-                    burstLLR(idx) = 0;                                   % hopeless window: erase
+                if reliabilityRatio > gammaErasure
+                    burstLLR(idx) = 0; % hopeless window: erase
                     isErased = true;
-                elseif reliabilityRatio > 1 && firstLLR_toErase <= lastLLR_toErase
-                    burstLLR(idx) = burstLLR(idx) / reliabilityRatio;    % noisier window: lower confidence
+                elseif reliabilityRatio > 1
+                    burstLLR(idx) = burstLLR(idx) / reliabilityRatio; % noisier window: lower confidence
                 end
             end
-            
-            
+
             % for diagnostic
             sigmaDD_windows(windowIdx) = sigmaDD_m;
             reliabilityRatio_windows(windowIdx) = reliabilityRatio;
@@ -1117,7 +1125,7 @@ function [errMax, ...
         % The hyperparameter/threshold below is validated through Monte 
         % Carlo campaigns, find the results and the method used in the 
         % Excel file: 'Montecarlo campaigns for thresholds validation'
-        if indexReliability < 4
+        if indexReliability < 5
             continue;
         end
 
@@ -1211,9 +1219,7 @@ function [errMax, ...
     TP = 0;
     FP = 0;
     FN = 0;
-    TN = 0;   
-
-    thresholdDDSCEBER = 0.174;
+    TN = 0;    
     for k = 1:numBursts    
         if ~burstDetected(k)
             continue;
@@ -1221,12 +1227,10 @@ function [errMax, ...
         ber = intraBurstDiagnostic(k).berGroundTruth;
         erased = intraBurstDiagnostic(k).erasedWindow;    
         % Ignore windows without a valid BER
-        valid = ~isnan(ber); 
+        valid = ~isnan(ber);      
+        thresholdDDSCEBER = 0.174;
         degraded = ber > thresholdDDSCEBER; % ber > 0.5 means that the majority of the bits 
-        % in the given window are errored. 
-        % For a Turbo Coder with rate 1/3, the theoretical limit should be
-        % around 17.4% of raw BER for still being able to completely
-        % reconstruct the original packet.
+        % in the given window are errored
         % sum(& & &) --> how many elements satisfy simultaneously all three 
         % conditions
         TP = TP + sum(valid & degraded & erased);
@@ -1259,41 +1263,10 @@ function [errMax, ...
     %remove headers
     rxBurstsPayloadLLR = rxFramedBurstsLLR(headerLength+1:end,:);
     % stack into column
-    % rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1);
-    rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR.', [], 1); % inter-burst de-interleaving
-
-    %TODO! ERASEME, and uncomment the row just above
-    % INTER-BURST INTERLEAVING INDICES
-    % The interleaver is a fixed pseudo-random permutation that must be IDENTICAL
-    % at the TX and at the RX, without exchanging any variable between them.
-    % This is achieved by generating it from a hard-coded seed:
-    %   1. rng(7,'twister') sets the Mersenne Twister generator to seed 7 and
-    %      returns in 'prevState' the state the generator had before the call,
-    %      i.e. the exact point reached by the simulation stream (seeded in
-    %      main.m). It acts as a bookmark.
-    %   2. randperm(N) is then deterministic: every call made right after
-    %      rng(7,'twister') returns the very same permutation of 1:N, so TX and
-    %      RX obtain the same indices.
-    %   3. rng(prevState) restores the simulation stream, so that the rest of the
-    %      simulation (new packet bits, burst timings, channel, noise,
-    %      interferers) proceeds exactly as if these lines had never been
-    %      executed. Without this step the random stream would stay stuck on
-    %      seed 7 and every packet would see the same "random" values.
-    % NOTE! The seed (7), the generator type ('twister') and N must be the same
-    % at TX and RX, otherwise the de-interleaving returns scrambled LLRs.
-    %{
-    % inter-burst de-interleaving (same seed as the TX)
-    prevState = rng(7, 'twister');
-    interburstIdx = randperm(numBursts*bitsPerBurst);
-    rng(prevState);
-    llrInt = rxBurstsPayloadLLR(:);              % bursts stacked column after column
-    rxEncodedPacketPaddedLLR = zeros(numBursts*bitsPerBurst, 1);
-    rxEncodedPacketPaddedLLR(interburstIdx) = llrInt;
-    %}
-
-    
+    % rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR,[],1); 
+    rxEncodedPacketPaddedLLR = reshape(rxBurstsPayloadLLR.', [], 1);    % de-interleaving
     % leave padding
-    rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits);
+    rxEncodedPacketLLR = rxEncodedPacketPaddedLLR(1:numEncodedBits); 
                
     % numIterations = 6; % the default is 6
     turboDec = comm.TurboDecoder( ... % 'TrellisStructure', trellis, ...
