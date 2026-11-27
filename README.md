@@ -243,4 +243,4 @@ The design driver can perform 100 million preamble trials. Do not rerun it for o
 
 For reproducible campaigns, record the Git revision, MATLAB/toolbox versions, RNG seed and scenario settings. Change one factor at a time, run a smoke test after code changes, and increase the packet count for final comparisons. Archive the raw reports before overwriting them.
 
-**Documentation scope:** based on static source inspection; MATLAB execution and full binary artifact validation were not performed. The minimum supported MATLAB release has not been established.
+**Documentation scope:** The minimum supported MATLAB release has not been established.
